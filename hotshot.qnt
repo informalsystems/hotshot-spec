@@ -58,7 +58,7 @@ module HotShotEpochReconfig {
     }
 
 
-    pure def isProposalSafe(proposal: Proposal, node:Node, state:LocalState): bool = //TODO: implement safety check
+    pure def isProposalSafe(proposal: Proposal, node:Node, state:LocalState): bool =
         or {
         proposal.block > state.lockedQC.block,// Safety Rule (TODO: rewrite using extend)
         proposal.certificate.view > state.lockedQC.view //Liveness Rule
@@ -92,8 +92,12 @@ module HotShotEpochReconfig {
         else true
         } 
 
-    pure def isExtendedProposalValid(proposal: Proposal, node: Node, state: LocalState): bool = //TODO: implement extended proposal verification
-        true
+    pure def isExtendedProposalValid(proposal: Proposal, node: Node, state: LocalState): bool = {//TODO: implement extended proposal verification
+        val hightQC = state.highQC
+        if ((proposal.block != proposal.certificate.block) or (proposal.block != hightQC.block)) false
+        else if ((proposal.view-1 != proposal.certificate.view) or (proposal.certificate.view-1 != hightQC.view)) false
+        else true
+    }
 
     pure def isProposalValid(proposal: Proposal, node: Node, state: LocalState): bool ={
         if (proposal.view < state.view) false
