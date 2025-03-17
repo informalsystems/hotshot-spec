@@ -39,6 +39,7 @@ module HotShotEpochReconfig {
 
 
     pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
+        
         val isLastBlock = (vote.block % K == 0)
         val epoch = if (isLastBlock) vote.block / K else vote.block / K + 1
         val validSignature = isSignatureValid(0)
@@ -49,8 +50,11 @@ module HotShotEpochReconfig {
             else if ((not (isInEpoch(node, epoch))) and (not (isInEpoch(node, epoch+1)))) false
             else validSignature
         }
-        else if (not(isLeader(vote.sender, vote.view, vote.block))) false
-        else true
+        else {
+            if (not(isLeader(node, vote.view+1, vote.block))) false
+            else if (not (isInEpoch(node, epoch))) false
+            else validSignature
+        }
     }
 
 
