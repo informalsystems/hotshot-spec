@@ -22,11 +22,17 @@ module HotShotEpochReconfig {
     //val correct = allNodes - Faulty
 
     var protocolState: ProtocolState
+    
+    
+    //// **Local pure functions** (helpers for logic, no state modification)
+
+    //
+    // Verification & validity functions
+    //
 
     pure def isInEpoch(node: Node, epoch: int): bool = //TODO: implement epoch check
         true
     
-    //// **Local pure functions** (helpers for logic, no state modification)
     pure def leader(view: int, epoch: int): int = //TODO: implement leader election
         0
 
@@ -39,7 +45,6 @@ module HotShotEpochReconfig {
 
 
     pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
-        
         val isLastBlock = (vote.block % K == 0)
         val epoch = if (isLastBlock) vote.block / K else vote.block / K + 1
         val validSignature = isSignatureValid(0)
@@ -60,8 +65,8 @@ module HotShotEpochReconfig {
 
     pure def isProposalSafe(proposal: Proposal, node:Node, state:LocalState): bool =
         or {
-        proposal.block > state.lockedQC.block,// Safety Rule (TODO: rewrite using extend)
-        proposal.certificate.view > state.lockedQC.view //Liveness Rule
+            proposal.block > state.lockedQC.block,// Safety Rule (TODO: rewrite using extend)
+            proposal.certificate.view > state.lockedQC.view //Liveness Rule
         }
 
 
@@ -109,7 +114,77 @@ module HotShotEpochReconfig {
         else true
     }
 
+    pure def updateCerts
 
+
+
+    // Message Sending via adding them to buffers using pure def functions
+    // Message delivery via actions
+    /*
+    Moves the vote from voteBuffer to incomingVotes.
+    action deliverVote(v: Address, vote: Vote) : bool = all {
+        voteBuffer.get(v).union(AllFaultyVotes).contains(vote), 
+        voteBuffer' = voteBuffer.put(v, voteBuffer.get(v).exclude(Set(vote))),
+        system' = system.put(v, { ...system.get(v), incomingVotes: system.get(v).incomingVotes.union(Set(vote)) }),
+        _hist' = _hist,
+        propBuffer' = propBuffer, 
+        certBuffer' = certBuffer,
+    }
+
+    Non-deterministically chooses a message type (proposal, vote, or certificate).
+    Delivers it to the validator
+    action deliver(v: Address) : bool = any {
+        val props = propBuffer.get(v).union(AllFaultyProposals)
+        all{
+            props.size() > 0,
+            nondet prop = oneOf(props)
+            deliverProposal(v, prop),
+        },
+        val votes = voteBuffer.get(v).union(AllFaultyVotes)
+        all {
+            votes.size() > 0,
+            nondet vote = oneOf(votes)
+            deliverVote(v, vote),
+        },
+        deliverSomeCertificate(v)
+    }
+
+    Validators process proposals and votes asynchronously.
+    Each validator executes the next step (nextAction()) asynchronously.
+    The system updates state accordingly
+    action valStep(v: Address) : bool = {
+        val next_action = system.get(v).nextAction() 
+        val node_state = next_action._1
+        val driver_input = next_action._2
+        val sys1 = system.put(v, node_state)
+        val res = driver(sys1.get(v).es, driver_input)
+        val driver_state = res.ds
+        val consensus_output = res.out
+        all {
+            system' = sys1.put(v, { ...sys1.get(v), es: driver_state}),
+            certBuffer' = sendCertificate(certBuffer, res.certificate),
+            _hist' = { validator: v, input: driver_input, output: consensus_output }
+        }
+    }
+
+    Execution Loop
+    The execution step (step) randomly picks a validator and either:
+        Executes a consensus step (valStep).
+        Delivers a pending message (deliver).
+        Sets a new value to propose (setNextValueToPropose).
+
+    action step = {
+        nondet v = oneOf(Correct)
+        nondet value = oneOf(Values)
+        any {
+            valStep(v),
+            deliver(v),
+            setNextValueToPropose(v, value),
+        }
+    }
+
+
+    */
 
 
     //// **Actions** (state transitions)
@@ -128,7 +203,7 @@ module HotShotEpochReconfig {
         })
     }
 
-    /// Start an epoch reconfiguration when conditions are met (epoch end or stake update)&#8203;:contentReference[oaicite:4]{index=4}
+    /// Start an epoch reconfiguration when conditions are met (epoch end or stake update)
     action proposeLastBlock = all {
     protocolState' = allNodes.mapBy(n => {
         epoch: 0,
