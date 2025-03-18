@@ -6,6 +6,8 @@ module HotShotEpochReconfig {
     import communication.* from "./communication"
     export communication.*
 
+    import basicSpells.* from "spells/basicSpells"
+
     //// **Constants** (system parameters)
     const N: int                      // total number of nodes (participants in consensus)
     const F: int                      // fault tolerance threshold (max number of Byzantine faults)
@@ -139,14 +141,11 @@ module HotShotEpochReconfig {
     //TODO: OR Accumulate votes
     pure def accumulateSignatures(vote: Vote, node: Node, state: LocalState): LocalState = { 
         val epochs = getEpochs(node, vote.block)
-        val newVotesMap = state.votesMap
-        val newVotes = epochs.map(e => {
+        val newVotes = epochs.fold(state.votesMap, (newVotesMap, e) => {
             val key = (vote.which, vote.block, vote.view, e)
-            val voters = state.votesMap.get(key).union(Set(node))
-            (key, voters)
+            newVotesMap.setByWithDefault(key, voters => voters.union(Set(node)), Set())
         })
-        //TODO: Check if this is the correct way to update the votesMap
-        { ...state, votesMap: newVotes.fold(newVotesMap, (acc, v) => acc.put(v._1, v._2)) }
+        { ...state, votesMap: newVotes }
     }
 
     pure def threshholdReached(vote: Vote): bool = {
