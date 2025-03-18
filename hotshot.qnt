@@ -1,10 +1,7 @@
 module HotShotEpochReconfig {
-
     import types.* from "./types"
-    export types.*
 
     import communication.* from "./communication"
-    export communication.*
 
     import basicSpells.* from "spells/basicSpells"
 
