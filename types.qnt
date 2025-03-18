@@ -32,7 +32,7 @@ module types {
         proposals: Set[Proposal],
         votes: Set[Vote],
         //may be needed to accumulate votes 
-        handledVotes: Block -> Set[Vote],
+        votesMap: Block -> (VoteType,Block, int, int) -> Set[Node], //(type, data, view, epoch) -> voters
         // Network buffer
         votesBuffer: Set[Vote],
         propsBuffer: Set[Proposal],

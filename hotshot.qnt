@@ -19,6 +19,7 @@ module HotShotEpochReconfig {
     pure val allNodes = 1.to(MAX_NODES)
     pure val stakingTables: List[StakingTable]= List()
     const Faulty: Set[Node]
+    val correct: Set[Node] = allNodes.exclude(Faulty)
     
     val allFaultyVotes : Set[Vote] = Set()
     val allFaultyProposals : Set[Proposal] = Set()
@@ -35,6 +36,7 @@ module HotShotEpochReconfig {
     pure def isInEpoch(node: Node, epoch: int): bool = //TODO: implement epoch check
         true
     
+    //TODO: I think it is possible to get the leader only from the view number(look at paper fig 3)
     pure def leader(view: int, epoch: int): int = //TODO: implement leader election
         0
 
@@ -118,6 +120,34 @@ module HotShotEpochReconfig {
 
     //pure def updateCerts
 
+    pure def getEpochs(node: Node, block: Block): Set[int] = {
+        val epochs = Set()
+        val isLastBlock = (block % K == 0)
+        val epoch = if (isLastBlock) block / K else block / K + 1
+        if (isLastBlock){
+            if (isInEpoch(node, epoch) and isInEpoch(node, epoch+1)) epochs.union(Set(epoch)).union(Set(epoch+1))
+            else if (isInEpoch(node, epoch)) epochs.union(Set(epoch))
+            else if (isInEpoch(node, epoch+1)) epochs.union(Set(epoch+1))
+            else epochs
+        } else {
+            if (isInEpoch(node, epoch)) epochs.union(Set(epoch))
+            else epochs
+        }
+    }
+
+    //TODO: OR Accumulate votes
+    pure def accumulateSignatures(vote: Vote, node: Node, state: LocalState): LocalState = { 
+        val epochs = getEpochs(node, vote.block)
+        val newVotesMap = state.votesMap
+        val newVotes = epochs.map(e => {
+            val key = (vote.which, vote.block, vote.view, e)
+            val voters = state.votesMap.get(key).union(Set(node))
+            (key, voters)
+        })
+        //TODO: Check if this is the correct way to update the votesMap
+        { ...state, votesMap: newVotes.fold(newVotesMap, (acc, v) => acc.put(v._1, v._2)) }
+    }
+
 
 
     action deliverVote(n: Node, vote: Vote): bool ={
@@ -125,8 +155,8 @@ module HotShotEpochReconfig {
         val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(Set(vote))
         val newVotes = protocolState.get(n).votes.union(Set(vote))
         all {
-        protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
-        protocolState' = protocolState.put(n, { ...protocolState.get(n), votesBuffer: newVotesBuffer, votes: newVotes })
+            protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
+            protocolState' = protocolState.put(n, { ...protocolState.get(n), votesBuffer: newVotesBuffer, votes: newVotes })
         }
     }
 
@@ -135,8 +165,8 @@ module HotShotEpochReconfig {
         val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(Set(proposal))
         val newProps = protocolState.get(n).proposals.union(Set(proposal))
         all {
-        protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(proposal),
-        protocolState' = protocolState.put(n, { ...protocolState.get(n), propsBuffer: newPropsBuffer, proposals: newProps })
+            protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(proposal),
+            protocolState' = protocolState.put(n, { ...protocolState.get(n), propsBuffer: newPropsBuffer, proposals: newProps })
         }
     }
 
@@ -154,6 +184,27 @@ module HotShotEpochReconfig {
             nondet vote = oneOf(votes)
             deliverVote(v, vote),
         }
+    }
+
+    
+    pure def nextAction(node: Node, state: LocalState) : LocalState = {
+        // TODO: Why the get on the protocolState didn't work?
+        val currentView = state.view
+        // TODO: @Gabriela, do we need to handle votes only in the view? I think it wont allow the 
+        // node to make progress .
+        // The asynchrony is handled anyway by the deliver action so we should be fine with this.
+        val currentVotes = state.votes
+        val currentProps = state.proposals
+        
+        // AS a leader, handle votes
+        if (currentVotes.size() > 0) {
+            currentVotes
+        }
+        else val aux = 5
+        
+        // As a node, handle proposals
+        state
+
     }
     
     /*
@@ -197,13 +248,14 @@ module HotShotEpochReconfig {
 
     //// **Actions** (state transitions)
     /// Initialize the system state (epoch 0 with initial membership)
-    action init = {
-        true
-    }
 
     /// Start an epoch reconfiguration when conditions are met (epoch end or stake update)
-    action proposeLastBlock = {
-        true
+    action step = {
+        nondet v = oneOf(correct)
+        any {
+            deliverMessage(v),
+            //valsStep(v),
+        }
     } // TODO
         
 }
