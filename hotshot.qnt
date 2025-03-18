@@ -158,7 +158,7 @@ module HotShotEpochReconfig {
         val newVotes = protocolState.get(n).votes.union(Set(vote))
         all {
             protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
-            protocolState' = protocolState.put(n, { ...protocolState.get(n), votesBuffer: newVotesBuffer, votes: newVotes })
+            protocolState' = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes })
         }
     }
 
@@ -168,7 +168,7 @@ module HotShotEpochReconfig {
         val newProps = protocolState.get(n).proposals.union(Set(proposal))
         all {
             protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(proposal),
-            protocolState' = protocolState.put(n, { ...protocolState.get(n), propsBuffer: newPropsBuffer, proposals: newProps })
+            protocolState' = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps })
         }
     }
 
