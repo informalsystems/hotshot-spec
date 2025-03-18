@@ -120,6 +120,7 @@ module HotShotEpochReconfig {
 
     //pure def updateCerts
 
+    //utility function to get the epochs that a node is part of, used for vote accumulation
     pure def getEpochs(node: Node, block: Block): Set[int] = {
         val epochs = Set()
         val isLastBlock = (block % K == 0)
@@ -146,6 +147,11 @@ module HotShotEpochReconfig {
         })
         //TODO: Check if this is the correct way to update the votesMap
         { ...state, votesMap: newVotes.fold(newVotesMap, (acc, v) => acc.put(v._1, v._2)) }
+    }
+
+    pure def threshholdReached(vote: Vote): bool = {
+        //TODO: Implement quorum check
+        true
     }
 
 
@@ -187,7 +193,7 @@ module HotShotEpochReconfig {
     }
 
     
-    pure def nextAction(node: Node, state: LocalState) : LocalState = {
+    pure def nodeHandler(node: Node, state: LocalState) : LocalState = {
         // TODO: Why the get on the protocolState didn't work?
         val currentView = state.view
         // TODO: @Gabriela, do we need to handle votes only in the view? I think it wont allow the 
@@ -196,15 +202,19 @@ module HotShotEpochReconfig {
         val currentVotes = state.votes
         val currentProps = state.proposals
         
-        // AS a leader, handle votes
         if (currentVotes.size() > 0) {
-            currentVotes
+            //Handle votes and update state
+            // votes have different logic based on role of the node (leader or not)
+            // if the node is a leader for the block included in the vote can be computed.
+            state
         }
-        else val aux = 5
-        
-        // As a node, handle proposals
-        state
-
+        else if (currentProps.size() > 0) {
+            //Handle proposals and update state
+            state
+        }
+        else {
+            state
+        }
     }
     
     /*
@@ -224,37 +234,21 @@ module HotShotEpochReconfig {
             certBuffer' = sendCertificate(certBuffer, res.certificate),
             _hist' = { validator: v, input: driver_input, output: consensus_output }
         }
-    }
+    }*/
 
+    
+    /*
     Execution Loop
     The execution step (step) randomly picks a validator and either:
-        Executes a consensus step (valStep).
+        Handles a received message 
         Delivers a pending message (deliver).
-        Sets a new value to propose (setNextValueToPropose).
-
-    action step = {
-        nondet v = oneOf(Correct)
-        nondet value = oneOf(Values)
-        any {
-            valStep(v),
-            deliver(v),
-            setNextValueToPropose(v, value),
-        }
-    }
-
-
+        ... Maybe separate handling messages from sending responses to have more atomic actions
     */
-
-
-    //// **Actions** (state transitions)
-    /// Initialize the system state (epoch 0 with initial membership)
-
-    /// Start an epoch reconfiguration when conditions are met (epoch end or stake update)
     action step = {
         nondet v = oneOf(correct)
         any {
             deliverMessage(v),
-            //valsStep(v),
+            //something modeled after valsStep,
         }
     } // TODO
         
