@@ -19,7 +19,9 @@ module HotShotEpochReconfig {
     pure val allNodes = 1.to(MAX_NODES)
     pure val stakingTables: List[StakingTable]= List()
     const Faulty: Set[Node]
-    //val correct = allNodes - Faulty
+    
+    val allFaultyVotes : Set[Vote] = Set()
+    val allFaultyProposals : Set[Proposal] = Set()
 
     var protocolState: ProtocolState
     
@@ -114,41 +116,47 @@ module HotShotEpochReconfig {
         else true
     }
 
-    pure def updateCerts
+    //pure def updateCerts
 
 
 
-    // Message Sending via adding them to buffers using pure def functions
-    // Message delivery via actions
-    /*
-    Moves the vote from voteBuffer to incomingVotes.
-    action deliverVote(v: Address, vote: Vote) : bool = all {
-        voteBuffer.get(v).union(AllFaultyVotes).contains(vote), 
-        voteBuffer' = voteBuffer.put(v, voteBuffer.get(v).exclude(Set(vote))),
-        system' = system.put(v, { ...system.get(v), incomingVotes: system.get(v).incomingVotes.union(Set(vote)) }),
-        _hist' = _hist,
-        propBuffer' = propBuffer, 
-        certBuffer' = certBuffer,
+    action deliverVote(n: Node, vote: Vote): bool ={
+        //exclude vote from buffer and add to votes
+        val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(Set(vote))
+        val newVotes = protocolState.get(n).votes.union(Set(vote))
+        all {
+        protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
+        protocolState' = protocolState.put(n, { ...protocolState.get(n), votesBuffer: newVotesBuffer, votes: newVotes })
+        }
     }
 
-    Non-deterministically chooses a message type (proposal, vote, or certificate).
-    Delivers it to the validator
-    action deliver(v: Address) : bool = any {
-        val props = propBuffer.get(v).union(AllFaultyProposals)
+    action deliverProposal(n: Node, proposal: Proposal): bool = {
+        //exclude proposal from buffer and add to proposals
+        val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(Set(proposal))
+        val newProps = protocolState.get(n).proposals.union(Set(proposal))
+        all {
+        protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(proposal),
+        protocolState' = protocolState.put(n, { ...protocolState.get(n), propsBuffer: newPropsBuffer, proposals: newProps })
+        }
+    }
+
+    //Non-deterministically chooses a message type (proposal, vote) and deliver it.
+    action deliverMessage(v: Node): bool = any{
+        val props = protocolState.get(v).propsBuffer.union(allFaultyProposals)
         all{
             props.size() > 0,
             nondet prop = oneOf(props)
             deliverProposal(v, prop),
         },
-        val votes = voteBuffer.get(v).union(AllFaultyVotes)
+        val votes = protocolState.get(v).votesBuffer.union(allFaultyVotes)
         all {
             votes.size() > 0,
             nondet vote = oneOf(votes)
             deliverVote(v, vote),
-        },
-        deliverSomeCertificate(v)
+        }
     }
-
+    
+    /*
     Validators process proposals and votes asynchronously.
     Each validator executes the next step (nextAction()) asynchronously.
     The system updates state accordingly
@@ -189,33 +197,13 @@ module HotShotEpochReconfig {
 
     //// **Actions** (state transitions)
     /// Initialize the system state (epoch 0 with initial membership)
-    action init = all {
-        protocolState' = allNodes.mapBy(n => {
-        epoch: 0,
-        view: 0,
-        highQC: {which: NoneC, signers: Set(), view: 0, block: 0},
-        lockedQC: {which: NoneC, signers: Set(), view: 0, block: 0},
-        //isActive: true,
-        //isLeader: false,
-        //leader: 0,
-        proposals: Set(),
-        votes: Set()
-        })
+    action init = {
+        true
     }
 
     /// Start an epoch reconfiguration when conditions are met (epoch end or stake update)
-    action proposeLastBlock = all {
-    protocolState' = allNodes.mapBy(n => {
-        epoch: 0,
-        view: 0,
-        highQC: {which: NoneC, signers: Set(), view: 0, block: 0},
-        lockedQC: {which: NoneC, signers: Set(), view: 0, block: 0},
-        //isActive: true,
-        //isLeader: false,
-        //leader: 0,
-        proposals: Set(),
-        votes: Set()
-        })
+    action proposeLastBlock = {
+        true
     } // TODO
         
 }
