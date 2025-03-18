@@ -353,4 +353,11 @@ module basicSpells {
     assert(setByWithDefault(Map(1 -> 2, 2 -> 3), 1, x => x + 1, 0) == Map(1 -> 3, 2 -> 3)),
     assert(setByWithDefault(Map(1 -> 2, 2 -> 3), 3, x => x + 1, 0) == Map(1 -> 2, 2 -> 3, 3 -> 1)),
   }
+
+  pure def unwrap(value: Option[a]): a = {
+    match value {
+      | None => Map().get(value)
+      | Some(x) => x
+    }
+  }
 }

@@ -12,12 +12,11 @@ module HotShotEpochReconfig {
     const K: int         // duration of an epoch
     const TIMEOUT_DELAY: int          // maximum waiting time (in protocol steps) before triggering a timeout
     const MAX_NODES: int              // size of the universe of node IDs (>= N, to allow new nodes joining)
-
+    const Faulty: Set[Node]
 
     //  Revise, this is only for protoyping
     pure val allNodes = 1.to(MAX_NODES)
     pure val stakingTables: List[StakingTable]= List()
-    const Faulty: Set[Node]
     val correct: Set[Node] = allNodes.exclude(Faulty)
     
     val allFaultyVotes : Set[Vote] = Set()
@@ -65,13 +64,19 @@ module HotShotEpochReconfig {
         }
     }
 
+    pure def extends(a: Block, b: Block): bool = {
+      // TODO: implement extends logic
+      a > b
+    }
 
-    pure def isProposalSafe(proposal: Proposal, node:Node, state:LocalState): bool =
-        or {
-            proposal.block > state.lockedQC.block,// Safety Rule (TODO: rewrite using extend)
-            proposal.certificate.view > state.lockedQC.view //Liveness Rule
-        }
-
+    pure def isProposalSafe(proposal: Proposal, node:Node, state:LocalState): bool = and {
+      state.lockedQC != None,
+      pure val lockedQC = state.lockedQC.unwrap()
+      or {
+        proposal.block.extends(lockedQC.block), // Safety Rule
+        proposal.certificate.view > lockedQC.view, // Liveness Rule
+      }
+    }
 
     pure def isJustifyCertValid(proposal: Proposal, node: Node, state: LocalState): bool =
         val cert = proposal.certificate
@@ -100,11 +105,24 @@ module HotShotEpochReconfig {
         else true
         } 
 
-    pure def isExtendedProposalValid(proposal: Proposal, node: Node, state: LocalState): bool = {//TODO: implement extended proposal verification
-        val hightQC = state.highQC
-        if ((proposal.block != proposal.certificate.block) or (proposal.block != hightQC.block)) false
-        else if ((proposal.view-1 != proposal.certificate.view) or (proposal.certificate.view-1 != hightQC.view)) false
-        else true
+    pure def isExtendedProposalValid(proposal: Proposal, node: Node, state: LocalState): bool = and {
+        // TODO: implement extended proposal verification
+        state.highQC != None,
+        val hightQC = state.highQC.unwrap()
+        and {
+          // The proposed block must be the same as in the justify QC
+          // and in the current high_qc
+          proposal.block == proposal.certificate.block,
+          proposal.block == hightQC.block,
+          // The proposal, the justify qc and the high qc
+          // need to me formed in three consecutive views
+          proposal.view - 1 == proposal.certificate.view,
+          proposal.certificate.view - 1 == hightQC.view
+          // If this proposal is eventually accepted by this node
+          // the justify qc will become a high qc and the high qc
+          // will become a locked qc. The certificate formed based
+          // on this proposal will become an eQC
+        }
     }
 
     pure def isProposalValid(proposal: Proposal, node: Node, state: LocalState): bool ={
@@ -173,7 +191,7 @@ module HotShotEpochReconfig {
     }
 
     //Non-deterministically chooses a message type (proposal, vote) and deliver it.
-    action deliverMessage(v: Node): bool = any{
+    action deliverMessage(v: Node): bool = any {
         val props = protocolState.get(v).propsBuffer.union(allFaultyProposals)
         all{
             props.size() > 0,
@@ -232,6 +250,20 @@ module HotShotEpochReconfig {
         }
     }*/
 
+
+    action init = {
+      protocolState' = 1.to(MAX_NODES).mapBy(node => {
+        epoch: 0,
+        view: 0,
+        highQC: None,
+        lockedQC: None,
+        proposals: Set(),
+        votes: Set(),
+        votesMap: Map(),
+        votesBuffer: Set(),
+        propsBuffer: Set(),
+      })
+    }
     
     /*
     Execution Loop
@@ -247,5 +279,9 @@ module HotShotEpochReconfig {
             //something modeled after valsStep,
         }
     } // TODO
-        
+}
+
+module hotshot {
+  // Some arbitrary numbers, just to enable simulation
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 2, TIMEOUT_DELAY = 4, MAX_NODES = 7, Faulty = Set(3)).*
 }

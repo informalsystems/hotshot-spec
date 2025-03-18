@@ -1,4 +1,5 @@
 module types {
+    import basicSpells.* from "spells/basicSpells"
 
     //// **Type definitions**
     type Block = int   //TODO: only storing block height currently
@@ -24,15 +25,16 @@ module types {
     type LocalState = {
         epoch: int, //TODO Is this necessary? based on the code, it seems like it can be calculated from block height  
         view: int,
-        highQC: Certificate, // highest proposal known to be valid
-        lockedQC: Certificate, // locked proposal
+        // TODO: Do we have an initial state for these, or do they have to be optional?
+        highQC: Option[Certificate], // highest proposal known to be valid
+        lockedQC: Option[Certificate], // locked proposal
         //isActive: bool,
         //isLeader: bool,
         //leader: int,
         proposals: Set[Proposal],
         votes: Set[Vote],
         //may be needed to accumulate votes 
-        votesMap: (VoteType,Block, int, int) -> Set[Node], //(type, data, view, epoch) -> voters
+        votesMap: (VoteType, Block, int, int) -> Set[Node], //(type, data, view, epoch) -> voters
         // Network buffer
         votesBuffer: Set[Vote],
         propsBuffer: Set[Proposal],
