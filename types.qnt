@@ -6,10 +6,9 @@ module types {
     type Node = int
     type NodeState = Active | Inactive // node status: part of current epoch (active) or not (inactive)
 
-    // TODO: I don't think we need these to be separate types.
-    type CertificateType = QuorumC | ExtendedC | NoneC        // type of certificate (quorum or extended)
-    type ProposalType = QuorumP | ExtendedP | NoneP           // type of proposal (quorum or extended)
-    type VoteType = QuorumV | ExtendedV | NoneV              // type of vote (quorum or extended)
+    type CertificateType = Quorum | Extended   // type of certificate (quorum or extended)
+    type ProposalType = CertificateType        // type of proposal (quorum or extended)
+    type VoteType = CertificateType            // type of vote (quorum or extended)
 
     // QC = Quorum Certificate
     type Certificate = {which: CertificateType, signers: Set[int], view : int, block: Block}

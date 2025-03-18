@@ -53,7 +53,7 @@ module HotShotEpochReconfig {
 
         if (vote.view < state.view) false //Old vote
         else if (isLastBlock){
-            if (vote.which != ExtendedV and not(isLeader(node, vote.view+1, vote.block))) false
+            if (vote.which != Extended and not(isLeader(node, vote.view+1, vote.block))) false
             else if ((not (isInEpoch(node, epoch))) and (not (isInEpoch(node, epoch+1)))) false
             else validSignature
         }
@@ -86,20 +86,20 @@ module HotShotEpochReconfig {
         val isLastBlock = (block % K == 0)
 
         if (isLastBlock){ //Last block of the epoch
-        if (cert.which == ExtendedC) false
+        if (cert.which == Extended) false
         else if (block == cert.block) false //TODO correctlySigned(cert, epoch) and correctlySigned(cert, epoch + 1) cert is signed by quorum in e and e+1
         else isProposalSafe(proposal, node, state) // TODO and correctlySigned(cert, epoch)
         }
 
         else if (isFirstBlock){ //First block of the epoch
-        if (cert.which != ExtendedC) false
+        if (cert.which != Extended) false
         else if (not(isProposalSafe(proposal, node, state))) false
         // else if not correctly signed by epoch and epoch - 1 false
         else true
         }
 
         else { // Not first or last block of the epoch
-        if (cert.which == ExtendedC) false
+        if (cert.which == Extended) false
         else if (not(isProposalSafe(proposal, node, state))) false //TODO correctlySigned(cert, epoch) and correctlySigned(cert, epoch + 1) cert is signed by quorum in e and e+1
         //else if not correctly signed by epoch false
         else true
@@ -125,17 +125,20 @@ module HotShotEpochReconfig {
         }
     }
 
-    pure def isProposalValid(proposal: Proposal, node: Node, state: LocalState): bool ={
+    pure def isProposalValid(state: LocalState, proposal: Proposal): bool = {
         if (proposal.view < state.view) false
         else if (not(isSignatureValid(0))) false //TODO: args need to be changed
         else if (not(isLeader(proposal.sender, proposal.view, proposal.block))) false
-        else if ((proposal.which == ExtendedP) and (not(isExtendedProposalValid(proposal, proposal.sender, state)))) 
+        else if ((proposal.which == Extended) and (not(isExtendedProposalValid(proposal, proposal.sender, state))))
         false
         else if (not (isJustifyCertValid(proposal, proposal.sender, state))) false
         else true
     }
 
-    //pure def updateCerts
+    pure def updateCerts(state: LocalState, cert: Certificate): LocalState = {
+      // TODO: potentially update lockedQC
+      { ...state, highQC: Some(cert) }
+    }
 
     //utility function to get the epochs that a node is part of, used for vote accumulation
     pure def getEpochs(node: Node, block: Block): Set[int] = {
@@ -168,7 +171,9 @@ module HotShotEpochReconfig {
         true
     }
 
-
+    pure def as_vote(p: Proposal): Vote = {
+      { sender: p.sender, which: p.which, view: p.view, block: p.block }
+    }
 
     action receiveVote(n: Node, vote: Vote): bool ={
         //exclude vote from buffer and add to votes
@@ -180,36 +185,65 @@ module HotShotEpochReconfig {
         }
     }
 
-    action receiveProposal(n: Node, proposal: Proposal): bool = {
+    pure def receiveProposal(state: LocalState, proposal: Proposal): { state: LocalState, vote: Option[Vote] } = {
         //exclude proposal from buffer and add to proposals
-        val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(Set(proposal))
-        val newProps = protocolState.get(n).proposals.union(Set(proposal))
-        all {
-            protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(proposal),
-            protocolState' = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps })
+        val state1 = { ...state, propsBuffer: state.propsBuffer.exclude(Set(proposal)) }
+        if (state1.isProposalValid(proposal)) {
+          val state2 = state1.updateCerts(proposal.certificate)
+          {
+            state: { ...state2, view: proposal.view },
+            // return vote to be sent in the action
+            vote: Some(proposal.as_vote()),
+          }
+        } else {
+          { state: state1, vote: None }
         }
     }
 
+    pure def sendVoteToLeader(state: ProtocolState, v: Node, vote: Vote): ProtocolState = {
+        pure val epoch = if (vote.block % K == 0) {
+            vote.block / K
+        } else {
+            vote.block / K + 1
+        }
+
+        pure val localState = state.get(v)
+        pure val leaderToSend = if (vote.which == Extended) {
+          leader(localState.view + 1, localState.epoch + 1)
+        } else {
+          leader(localState.view + 1, localState.epoch)
+        }
+
+        sendVote(state, leaderToSend, vote)
+    }
+
     //Non-deterministically chooses a message type (proposal, vote) and receives it.
-    action receiveMessage(v: Node): bool = any {
-        val props = protocolState.get(v).propsBuffer.union(allFaultyProposals)
-        all{
-            props.size() > 0,
-            nondet prop = oneOf(props)
-            receiveProposal(v, prop),
-        },
-        val votes = protocolState.get(v).votesBuffer.union(allFaultyVotes)
-        all {
-            votes.size() > 0,
-            nondet vote = oneOf(votes)
-            receiveVote(v, vote),
+    action receiveMessage(v: Node): bool = {
+        val state = protocolState.get(v)
+        any {
+          val props = state.propsBuffer.union(allFaultyProposals)
+          all {
+              props.size() > 0,
+              nondet prop = oneOf(props)
+              val result = receiveProposal(state, prop)
+              protocolState' = match result.vote {
+                | Some(vote) => protocolState.set(v, result.state).sendVoteToLeader(v, vote)
+                | None => protocolState.set(v, result.state)
+              }
+          },
+          val votes = state.votesBuffer.union(allFaultyVotes)
+          all {
+              votes.size() > 0,
+              nondet vote = oneOf(votes)
+              receiveVote(v, vote),
+          }
         }
     }
 
     action newVote(v: Node): bool = {
       // TODO: This is arbitrary, we should generate proper votes here
       val nodeState = protocolState.get(v)
-      nondet voteType = Set(QuorumV, ExtendedV, NoneV).oneOf()
+      nondet voteType = Set(Quorum, Extended).oneOf()
       val vote = { sender: v, which: voteType, view: nodeState.view, block: K }
       protocolState' = protocolState.broadcastVote(vote)
     }
@@ -217,8 +251,8 @@ module HotShotEpochReconfig {
     action newProposal(v: Node): bool = {
       // TODO: This is arbitrary, we should generate proper proposals here
       val nodeState = protocolState.get(v)
-      nondet propType = Set(QuorumP, ExtendedP, NoneP).oneOf()
-      nondet certType = Set(QuorumC, ExtendedC, NoneC).oneOf()
+      nondet propType = Set(Quorum, Extended).oneOf()
+      nondet certType = Set(Quorum, Extended).oneOf()
       val cert = { which: certType, signers: Set(v), view: nodeState.view, block: K }
       val prop = { sender: v, which: propType, view: nodeState.view, block: K, certificate: cert }
       protocolState' = protocolState.broadcastProposal(prop)
@@ -299,6 +333,11 @@ module HotShotEpochReconfig {
             //something modeled after valsStep,
         }
     } // TODO
+
+    // quint run hotshot.qnt --invariant=witness to try to find an interesting couterexample
+    // where this property doesn't hold
+    // Doesn't find any yet because we aren't generating any valid proposals
+    val witness = protocolState.values().forall(state => state.highQC == None)
 }
 
 module hotshot {
