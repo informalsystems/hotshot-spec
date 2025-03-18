@@ -170,7 +170,7 @@ module HotShotEpochReconfig {
 
 
 
-    action deliverVote(n: Node, vote: Vote): bool ={
+    action receiveVote(n: Node, vote: Vote): bool ={
         //exclude vote from buffer and add to votes
         val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(Set(vote))
         val newVotes = protocolState.get(n).votes.union(Set(vote))
@@ -180,7 +180,7 @@ module HotShotEpochReconfig {
         }
     }
 
-    action deliverProposal(n: Node, proposal: Proposal): bool = {
+    action receiveProposal(n: Node, proposal: Proposal): bool = {
         //exclude proposal from buffer and add to proposals
         val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(Set(proposal))
         val newProps = protocolState.get(n).proposals.union(Set(proposal))
@@ -190,20 +190,38 @@ module HotShotEpochReconfig {
         }
     }
 
-    //Non-deterministically chooses a message type (proposal, vote) and deliver it.
-    action deliverMessage(v: Node): bool = any {
+    //Non-deterministically chooses a message type (proposal, vote) and receives it.
+    action receiveMessage(v: Node): bool = any {
         val props = protocolState.get(v).propsBuffer.union(allFaultyProposals)
         all{
             props.size() > 0,
             nondet prop = oneOf(props)
-            deliverProposal(v, prop),
+            receiveProposal(v, prop),
         },
         val votes = protocolState.get(v).votesBuffer.union(allFaultyVotes)
         all {
             votes.size() > 0,
             nondet vote = oneOf(votes)
-            deliverVote(v, vote),
+            receiveVote(v, vote),
         }
+    }
+
+    action newVote(v: Node): bool = {
+      // TODO: This is arbitrary, we should generate proper votes here
+      val nodeState = protocolState.get(v)
+      nondet voteType = Set(QuorumV, ExtendedV, NoneV).oneOf()
+      val vote = { sender: v, which: voteType, view: nodeState.view, block: K }
+      protocolState' = protocolState.broadcastVote(vote)
+    }
+
+    action newProposal(v: Node): bool = {
+      // TODO: This is arbitrary, we should generate proper proposals here
+      val nodeState = protocolState.get(v)
+      nondet propType = Set(QuorumP, ExtendedP, NoneP).oneOf()
+      nondet certType = Set(QuorumC, ExtendedC, NoneC).oneOf()
+      val cert = { which: certType, signers: Set(v), view: nodeState.view, block: K }
+      val prop = { sender: v, which: propType, view: nodeState.view, block: K, certificate: cert }
+      protocolState' = protocolState.broadcastProposal(prop)
     }
 
     
@@ -275,7 +293,9 @@ module HotShotEpochReconfig {
     action step = {
         nondet v = oneOf(correct)
         any {
-            deliverMessage(v),
+            receiveMessage(v),
+            newVote(v),
+            newProposal(v),
             //something modeled after valsStep,
         }
     } // TODO

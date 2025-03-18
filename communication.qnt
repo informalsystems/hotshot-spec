@@ -1,7 +1,6 @@
 module communication{
-
+    import basicSpells.* from "spells/basicSpells"
     import types.* from "./types"
-    export types.*
 
     //// ** MESSAGE PASSING FUNCTIONS **
     pure def broadcastProposal(state : ProtocolState, proposal: Proposal):ProtocolState = { //THIS PROBABLY WON'T BE USED
@@ -27,8 +26,7 @@ module communication{
     }
 
     pure def broadcastVote(state : ProtocolState, vote: Vote):ProtocolState = { //THIS PROBABLY WON'T BE USED
-        state.keys().mapBy(p => {
-            val nodeState = state.get(p)
+        state.transformValues(nodeState => {
             val newvotesBuffer = nodeState.votesBuffer.union(Set(vote))
             { ...nodeState, votesBuffer: newvotesBuffer }
         })
