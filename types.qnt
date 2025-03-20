@@ -30,6 +30,7 @@ module types {
         // TODO: Do we have an initial state for these, or do they have to be optional?
         highQC: Option[Certificate], // highest proposal known to be valid
         lockedQC: Option[Certificate], // locked proposal
+        decidedQC: Option[Certificate], // decided proposal
         //isActive: bool,
         //isLeader: bool,
         //leader: int,

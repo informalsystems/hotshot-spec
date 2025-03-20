@@ -145,14 +145,50 @@ module HotShotEpochReconfig {
         else true
     }
 
-    pure def fetchProposal(node: Node, state: LocalState, cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
+    pure def fetchProposal(cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
         //return the proposal that has the certificate
         propDA.find(prop => prop.certificate == cert)
     }
 
-    pure def updateCerts(state: LocalState, cert: Certificate): LocalState = {
-      // TODO: potentially update lockedQC
-      { ...state, highQC: Some(cert) }
+    // To be removed
+    pure def certOrNeg(cert: Option[Certificate]): Certificate = {
+        match(cert){
+            |None => {which: Quorum, signers: Set(), view: -1, block: -1}
+            |Some(c) => c
+        }
+    }
+
+    pure def updateCerts(state: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
+      val highQC = cert
+      val lockedQC = certOrNeg(state.lockedQC) //TODO: This is a hack, need to fix
+      val decidedQC = certOrNeg(state.decidedQC) //TODO: This is a hack, need to fix
+      val justifyHighP = fetchProposal(highQC, allProps)
+      match(justifyHighP){
+        |None => state
+        |Some(p) => {
+            val justifyHighQC = p.certificate
+            val justify2HighP = fetchProposal(justifyHighQC, allProps)
+            match(justify2HighP){
+                |None => state
+                |Some(p2) => {
+                    val justify2HighQC = p2.certificate
+                    val updateLockedQC = and {highQC.view - 1 == justifyHighQC.view, justifyHighQC.view > lockedQC.view}
+                    val updateDecidedQC = and {justifyHighQC.view - 1 == justify2HighQC.view, justify2HighQC.view > decidedQC.view}
+
+                    if (updateLockedQC and updateDecidedQC){
+                        { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC)}
+                    } else if (updateLockedQC){
+                        { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC)}
+                    } else if (updateDecidedQC){ //this can be ommited maybe ?
+                        { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC) }
+                    } else {
+                        { ...state, highQC: Some(highQC)} 
+                } 
+            }
+          
+          }
+        }
+      } 
     }
 
     //utility function to get the epochs that a node is part of, used for vote accumulation
@@ -248,7 +284,7 @@ module HotShotEpochReconfig {
     }
 
     
-    pure def nodeHandler(node: Node, state: LocalState) : LocalState = {
+    pure def nodeHandler(node: Node, state: LocalState, allProps: Set[Proposal]) : LocalState = {
         val currentView = state.view
         val currentVotes = state.votes
         val currentProps = state.proposals
@@ -274,7 +310,7 @@ module HotShotEpochReconfig {
                         val newCert = { which: vote.which, signers: signers, view: vote.view, block: vote.block }
                         
                         // Update certificates
-                        updateCerts(stateWithVote, newCert)
+                        updateCerts(stateWithVote, newCert, allProps)
                     } else {
                         stateWithVote
                     }
@@ -290,7 +326,7 @@ module HotShotEpochReconfig {
                 // Check if the proposal is valid
                 if (isProposalValid(updatedState, prop)) {
                     // Update certificates based on the proposal's certificate
-                    val stateWithCerts = updateCerts(updatedState, prop.certificate)
+                    val stateWithCerts = updateCerts(updatedState, prop.certificate, allProps)
                     
                     // Update view to match the proposal's view
                     { ...stateWithCerts, view: prop.view }
@@ -311,6 +347,7 @@ module HotShotEpochReconfig {
         view: 0,
         highQC: None,
         lockedQC: None,
+        decidedQC: None,
         proposals: Set(),
         votes: Set(),
         votesMap: Map(),
@@ -333,7 +370,7 @@ module HotShotEpochReconfig {
             deliverMessage(v),
             all {
                 val nodeState = protocolState.get(v)
-                val updatedState = nodeHandler(v, nodeState)
+                val updatedState = nodeHandler(v, nodeState, propAvailabilityLayer)
                 protocolState' = protocolState.put(v, updatedState)
             }
         }
