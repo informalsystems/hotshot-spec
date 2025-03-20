@@ -16,7 +16,9 @@ module types {
     type Vote = {sender: Node, which: VoteType, view: int, block: Block}             
     type Proposal = {sender: Node, which: ProposalType, view: int, block: Block, certificate: Certificate}
     
-
+    //type Message = 
+        //Vote({sender: Node, which: VoteType, view: int, block: Block})
+        //|Proposal({sender: Node, which: ProposalType, view: int, block: Block, certificate: Certificate})
     //  Revise, this is only for protoyping
     type StakingTable = Set[int]
 

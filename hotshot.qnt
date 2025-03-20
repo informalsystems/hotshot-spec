@@ -23,27 +23,35 @@ module HotShotEpochReconfig {
     val allFaultyProposals : Set[Proposal] = Set()
 
     var protocolState: ProtocolState
-    
-    
-    //// **Local pure functions** (helpers for logic, no state modification)
 
+    //Maybe use this to store all the proposals seen
+    var propAvailabilityLayer: Set[Proposal]
+    
+    
     //
     // Verification & validity functions
     //
 
-    pure def isInEpoch(node: Node, epoch: int): bool = //TODO: implement epoch check
-        true
+    pure def isInEpoch(node: Node, epoch: int): bool = {
+        // epochs start at 0
+        // Check if the node is part of the staking table for the given epoch
+        // If stakingTables list is empty or epoch is out of bounds, default to true
+        if (epoch < 0 or epoch >= length(stakingTables)) false
+        else stakingTables[epoch].contains(node)
+    }
     
-    //TODO: I think it is possible to get the leader only from the view number(look at paper fig 3)
-    pure def leader(view: int, epoch: int): int = //TODO: implement leader election
-        0
+    pure def leader(view: int, epoch: int): int = {
+        1
+    }
 
-    pure def isLeader(node: Node, view: int, block: int): bool =
+    pure def isLeader(node: Node, view: int, block: int): bool = {
         val epoch = if (block % K == 0) block / K else block / K + 1
         node == leader(view, epoch)
+    }
 
-    pure def isSignatureValid(dummy: int): bool = //TODO: implement signature verification
+    pure def isSignatureValid(dummy: int): bool = {
         true
+    }
 
 
     pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
@@ -65,7 +73,9 @@ module HotShotEpochReconfig {
     }
 
     pure def extends(a: Block, b: Block): bool = {
-      // TODO: implement extends logic
+      // In a blockchain, block a extends block b if a has a higher height than b
+      // and a is built on top of b (directly or indirectly)
+      // Since we're only storing block height currently, we check if a > b
       a > b
     }
 
@@ -135,6 +145,11 @@ module HotShotEpochReconfig {
         else true
     }
 
+    pure def fetchProposal(node: Node, state: LocalState, cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
+        //return the proposal that has the certificate
+        propDA.find(prop => prop.certificate == cert)
+    }
+
     pure def updateCerts(state: LocalState, cert: Certificate): LocalState = {
       // TODO: potentially update lockedQC
       { ...state, highQC: Some(cert) }
@@ -156,7 +171,6 @@ module HotShotEpochReconfig {
         }
     }
 
-    //TODO: OR Accumulate votes
     pure def accumulateSignatures(vote: Vote, node: Node, state: LocalState): LocalState = { 
         val epochs = getEpochs(node, vote.block)
         val newVotes = epochs.fold(state.votesMap, (newVotesMap, e) => {
@@ -166,38 +180,16 @@ module HotShotEpochReconfig {
         { ...state, votesMap: newVotes }
     }
 
-    pure def threshholdReached(vote: Vote): bool = {
-        //TODO: Implement quorum check
-        true
-    }
-
-    pure def as_vote(p: Proposal): Vote = {
-      { sender: p.sender, which: p.which, view: p.view, block: p.block }
-    }
-
-    action receiveVote(n: Node, vote: Vote): bool ={
-        //exclude vote from buffer and add to votes
-        val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(Set(vote))
-        val newVotes = protocolState.get(n).votes.union(Set(vote))
-        all {
-            protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
-            protocolState' = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes })
-        }
-    }
-
-    pure def receiveProposal(state: LocalState, proposal: Proposal): { state: LocalState, vote: Option[Vote] } = {
-        //exclude proposal from buffer and add to proposals
-        val state1 = { ...state, propsBuffer: state.propsBuffer.exclude(Set(proposal)) }
-        if (state1.isProposalValid(proposal)) {
-          val state2 = state1.updateCerts(proposal.certificate)
-          {
-            state: { ...state2, view: proposal.view },
-            // return vote to be sent in the action
-            vote: Some(proposal.as_vote()),
-          }
-        } else {
-          { state: state1, vote: None }
-        }
+    pure def threshholdReached(vote: Vote, state: LocalState): bool = {
+        // Check if we have enough votes (Q signatures) for this vote
+        val epochs = getEpochs(vote.sender, vote.block)
+        
+        // For each relevant epoch, check if we have enough votes
+        epochs.exists(e => {
+            val key = (vote.which, vote.block, vote.view, e)
+            val voters = state.votesMap.getOrElse(key, Set())
+            voters.size() >= Q
+        })
     }
 
     pure def sendVoteToLeader(state: ProtocolState, v: Node, vote: Vote): ProtocolState = {
@@ -213,95 +205,105 @@ module HotShotEpochReconfig {
         } else {
           leader(localState.view + 1, localState.epoch)
         }
-
         sendVote(state, leaderToSend, vote)
     }
 
+    action deliverVote(n: Node, vote: Vote): bool ={
+        //exclude vote from buffer and add to votes
+        val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(Set(vote))
+        val newVotes = protocolState.get(n).votes.union(Set(vote))
+        all {
+            protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
+            protocolState' = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes })
+        }
+    }
+
+    action deliverProposal(n: Node, prop: Proposal): bool ={
+        //exclude proposal from buffer and add to proposals
+        val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(Set(prop))
+        val newProps = protocolState.get(n).proposals.union(Set(prop))
+        all {
+            protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(prop),
+            protocolState' = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps })
+        }
+    }
+
     //Non-deterministically chooses a message type (proposal, vote) and receives it.
-    action receiveMessage(v: Node): bool = {
+    action deliverMessage(v: Node): bool = {
         val state = protocolState.get(v)
         any {
           val props = state.propsBuffer.union(allFaultyProposals)
           all {
               props.size() > 0,
               nondet prop = oneOf(props)
-              val result = receiveProposal(state, prop)
-              protocolState' = match result.vote {
-                | Some(vote) => protocolState.set(v, result.state).sendVoteToLeader(v, vote)
-                | None => protocolState.set(v, result.state)
-              }
+              deliverProposal(v, prop),
           },
           val votes = state.votesBuffer.union(allFaultyVotes)
           all {
               votes.size() > 0,
               nondet vote = oneOf(votes)
-              receiveVote(v, vote),
+              deliverVote(v, vote),
           }
         }
     }
 
-    action newVote(v: Node): bool = {
-      // TODO: This is arbitrary, we should generate proper votes here
-      val nodeState = protocolState.get(v)
-      nondet voteType = Set(Quorum, Extended).oneOf()
-      val vote = { sender: v, which: voteType, view: nodeState.view, block: K }
-      protocolState' = protocolState.broadcastVote(vote)
-    }
-
-    action newProposal(v: Node): bool = {
-      // TODO: This is arbitrary, we should generate proper proposals here
-      val nodeState = protocolState.get(v)
-      nondet propType = Set(Quorum, Extended).oneOf()
-      nondet certType = Set(Quorum, Extended).oneOf()
-      val cert = { which: certType, signers: Set(v), view: nodeState.view, block: K }
-      val prop = { sender: v, which: propType, view: nodeState.view, block: K, certificate: cert }
-      protocolState' = protocolState.broadcastProposal(prop)
-    }
-
     
     pure def nodeHandler(node: Node, state: LocalState) : LocalState = {
-        // TODO: Why the get on the protocolState didn't work?
         val currentView = state.view
-        // TODO: @Gabriela, do we need to handle votes only in the view? I think it wont allow the 
-        // node to make progress .
-        // The asynchrony is handled anyway by the deliver action so we should be fine with this.
         val currentVotes = state.votes
         val currentProps = state.proposals
         
-        if (currentVotes.size() > 0) {
-            //Handle votes and update state
-            // votes have different logic based on role of the node (leader or not)
-            // if the node is a leader for the block included in the vote can be computed.
-            state
+        if (q::debug("Processing votes", currentVotes.size() > 0)){
+            // Handle votes and update state
+            // If this node is a leader for the current view, it should collect votes
+            // and form certificates when enough votes are received
+            
+            // Process each vote
+            
+            currentVotes.fold(state, (updatedState, vote) => {
+                // Check if the vote is valid
+                if (isVoteValid(vote, node, updatedState)) {
+                    // Accumulate the vote
+                    val stateWithVote = accumulateSignatures(vote, vote.sender, updatedState)
+                    
+                    // Check if we have enough votes to form a certificate
+                    if (threshholdReached(vote, stateWithVote)) {
+                        // Create a new certificate
+                        val key = (vote.which, vote.block, vote.view, updatedState.epoch)
+                        val signers = stateWithVote.votesMap.getOrElse(key, Set())
+                        val newCert = { which: vote.which, signers: signers, view: vote.view, block: vote.block }
+                        
+                        // Update certificates
+                        updateCerts(stateWithVote, newCert)
+                    } else {
+                        stateWithVote
+                    }
+                } else {
+                    updatedState
+                }
+            })
         }
-        else if (currentProps.size() > 0) {
-            //Handle proposals and update state
-            state
+        else if (q::debug("Processing Props", currentProps.size() > 0)){
+            // Handle proposals and update state
+            // Process each proposal
+            currentProps.fold(state, (updatedState, prop) => {
+                // Check if the proposal is valid
+                if (isProposalValid(updatedState, prop)) {
+                    // Update certificates based on the proposal's certificate
+                    val stateWithCerts = updateCerts(updatedState, prop.certificate)
+                    
+                    // Update view to match the proposal's view
+                    { ...stateWithCerts, view: prop.view }
+                } else {
+                    updatedState
+                }
+            })
         }
         else {
             state
         }
     }
     
-    /*
-    Validators process proposals and votes asynchronously.
-    Each validator executes the next step (nextAction()) asynchronously.
-    The system updates state accordingly
-    action valStep(v: Address) : bool = {
-        val next_action = system.get(v).nextAction() 
-        val node_state = next_action._1
-        val driver_input = next_action._2
-        val sys1 = system.put(v, node_state)
-        val res = driver(sys1.get(v).es, driver_input)
-        val driver_state = res.ds
-        val consensus_output = res.out
-        all {
-            system' = sys1.put(v, { ...sys1.get(v), es: driver_state}),
-            certBuffer' = sendCertificate(certBuffer, res.certificate),
-            _hist' = { validator: v, input: driver_input, output: consensus_output }
-        }
-    }*/
-
 
     action init = {
       protocolState' = 1.to(MAX_NODES).mapBy(node => {
@@ -327,12 +329,15 @@ module HotShotEpochReconfig {
     action step = {
         nondet v = oneOf(correct)
         any {
-            receiveMessage(v),
-            newVote(v),
-            newProposal(v),
-            //something modeled after valsStep,
+            // Receive and process a message
+            deliverMessage(v),
+            all {
+                val nodeState = protocolState.get(v)
+                val updatedState = nodeHandler(v, nodeState)
+                protocolState' = protocolState.put(v, updatedState)
+            }
         }
-    } // TODO
+    }
 
     // quint run hotshot.qnt --invariant=witness to try to find an interesting couterexample
     // where this property doesn't hold
