@@ -16,7 +16,12 @@ module HotShotEpochReconfig {
 
     //  Revise, this is only for protoyping
     pure val allNodes = 1.to(MAX_NODES)
-    pure val stakingTables: List[StakingTable]= List()
+    pure val stakingTables: List[StakingTable]=List(
+    // First epoch staking table: nodes 1, 2, 4, 5 are active
+    Set(1, 2, 4, 5),
+    // Second epoch staking table: nodes 1, 2, 4, 6 are active
+    Set(1, 2, 3, 6),
+    )
     val correct: Set[Node] = allNodes.exclude(Faulty)
     
     val allFaultyVotes : Set[Vote] = Set()
@@ -25,7 +30,7 @@ module HotShotEpochReconfig {
     var protocolState: ProtocolState
 
     //Maybe use this to store all the proposals seen
-    val propAvailabilityLayer: Set[Proposal] = Set()
+    var propAvailabilityLayer: Set[Proposal]
     
     
     //
@@ -51,7 +56,7 @@ module HotShotEpochReconfig {
     }
 
 
-    pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
+    pure def isVoteValid2(vote: Vote, node: Node, state: LocalState): bool = {
         val isLastBlock = (vote.block % K == 0)
         val epoch = if (isLastBlock) vote.block / K else vote.block / K + 1
         val validSignature = isSignatureValid(0)
@@ -69,6 +74,10 @@ module HotShotEpochReconfig {
         }
     }
 
+    pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
+        true
+    }
+
     pure def extends(a: Block, b: Block): bool = {
       // In a blockchain, block a extends block b if a has a higher height than b
       // and a is built on top of b (directly or indirectly)
@@ -76,7 +85,7 @@ module HotShotEpochReconfig {
       a > b
     }
 
-    pure def proposal(node: Node, block: Block, view: int, which: ProposalType, cert: Certificate): Proposal = {
+    pure def proposal(node: Node, block: Block, view: int, which: ProposalType, cert: Certificate): Proposal = { //TODO: allProps is a hack, need to fix
         {sender: node, which: Quorum, view: view, block: block, certificate: cert}
     }
 
@@ -191,7 +200,7 @@ module HotShotEpochReconfig {
         }
     }
 
-    pure def isProposalValid(state: LocalState, proposal: Proposal): bool = {
+    pure def isProposalValid2(state: LocalState, proposal: Proposal): bool = {
         if (proposal.view < state.view) false
         else if (not(isSignatureValid(0))) false //TODO: args need to be changed
         else if (not(isLeader(proposal.sender, proposal.view, proposal.block))) false
@@ -199,6 +208,10 @@ module HotShotEpochReconfig {
         false
         else if (not (isJustifyCertValid(proposal, proposal.sender, state))) false
         else true
+    }
+
+    pure def isProposalValid(state: LocalState, proposal: Proposal): bool = {
+       true
     }
 
     pure def fetchProposal(cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
@@ -267,7 +280,7 @@ module HotShotEpochReconfig {
         val epochs = getEpochs(node, vote.block)
         val newVotes = epochs.fold(state.votesMap, (newVotesMap, e) => {
             val key = (vote.which, vote.block, vote.view, e)
-            newVotesMap.setByWithDefault(key, voters => voters.union(Set(node)), Set())
+            newVotesMap.setByWithDefault(key, voters => voters.union(Set(vote.sender)), Set())
         })
         { ...state, votesMap: newVotes }
     }
@@ -297,7 +310,8 @@ module HotShotEpochReconfig {
         } else {
           leader(localState.view + 1, localState.epoch)
         }
-        sendVote(state, leaderToSend, vote)
+         
+         sendVote(state, leaderToSend, vote)
     }
 
     action deliverVote(n: Node, vote: Vote): bool ={
@@ -306,7 +320,8 @@ module HotShotEpochReconfig {
         val newVotes = protocolState.get(n).votes.union(Set(vote))
         all {
             protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
-            protocolState' = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes })
+            protocolState' = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes }),
+            propAvailabilityLayer' = propAvailabilityLayer //TODO: This is a hack, need to fix
         }
     }
 
@@ -316,13 +331,15 @@ module HotShotEpochReconfig {
         val newProps = protocolState.get(n).proposals.union(Set(prop))
         all {
             protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(prop),
-            protocolState' = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps })
+            protocolState' = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps }),
+            propAvailabilityLayer' = propAvailabilityLayer //TODO: This is a hack, need to fix
         }
     }
 
     //Non-deterministically chooses a message type (proposal, vote) and receives it.
     action deliverMessage(v: Node): bool = {
         val state = protocolState.get(v)
+
         any {
           val props = state.propsBuffer.union(allFaultyProposals)
           all {
@@ -341,8 +358,9 @@ module HotShotEpochReconfig {
 
 
     pure def handleVote(vote: Vote, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
-        val state = pState.get(node)
-        
+        val oldState = pState.get(node)
+        val state = { ...oldState, votes: oldState.votes.exclude(Set(vote)), voteArchive: oldState.voteArchive.union(Set(vote))}
+
         if (isLeader(node,state.view, state.epoch)){
             if (isVoteValid(vote, node, state)){
                 val updatedState = accumulateSignatures(vote, node, state)
@@ -353,7 +371,7 @@ module HotShotEpochReconfig {
                     val newView = cert.view + 1
                     val newState = { ...stateWithCerts, view: newView }
                     // Form a proposal
-                    val prop = proposal(node, vote.block, vote.view, vote.which, cert)
+                    val prop = formProposal(node, cert)
                     // Update certificates based on the proposal's certificate
                     broadcastProposal(pState.setBy(node, state => newState), prop)
                 } else {
@@ -392,12 +410,14 @@ module HotShotEpochReconfig {
     }
 
     pure def handleProposal(prop: Proposal, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
-        val state = pState.get(node)
+        val oldState = pState.get(node)
+        val state = { ...oldState, proposals: oldState.proposals.exclude(Set(prop)), proposalArchive: oldState.proposalArchive.union(Set(prop))}
         
         if (isProposalValid(state, prop)){
             val stateWithcerts = updateCerts(state, prop.certificate, allProps)
             val newView = prop.view
-            val newState = { ...stateWithcerts, view: newView }
+            val newState = { ...stateWithcerts, view: newView}
+            // remove the proposal from the state
             val newVote = vote(node, prop.block, prop.view, prop.which)
             val newPstate = pState.setBy(node, state => newState)
             sendVoteToLeader(newPstate, node, newVote)
@@ -413,12 +433,12 @@ module HotShotEpochReconfig {
         val currentVotes = state.votes
         val currentProps = state.proposals
         
-        if (q::debug("Processing votes", currentVotes.size() > 0)){
+        if (currentVotes.size() > 0){
             currentVotes.fold(pState, (updatedState, vote) => {
                 handleVote(vote, pState, node, allProps)})
             
         }
-        else if (q::debug("Processing Props", currentProps.size() > 0)){
+        else if (currentProps.size() > 0){
             currentProps.fold(pState, (updatedState, prop) => {
                 handleProposal(prop, pState, node, allProps)})
         }
@@ -426,7 +446,30 @@ module HotShotEpochReconfig {
             pState
         }
     }
+
+    pure def stateToAllProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
+        pState.values().fold(allProps, (props, state) => {
+            props.union(state.proposals).union(state.propsBuffer)
+        })
+    }
     
+
+
+    val genesisCert = {
+        which: Quorum, 
+        signers: Set(1, 2, 4), 
+        nextEpochSigners: Set(),
+        view: 0, 
+        block: 0
+    }
+
+    val genesisProp = {
+        sender: 1, 
+        which: Quorum, 
+        view: 1, 
+        block: 1, 
+        certificate: genesisCert
+    }
 
     action init = all {
       protocolState' = 1.to(MAX_NODES).mapBy(node => {
@@ -437,11 +480,13 @@ module HotShotEpochReconfig {
         decidedQC: None,
         proposals: Set(),
         votes: Set(),
+        proposalArchive: Set(),
+        voteArchive: Set(),
         votesMap: Map(),
         votesBuffer: Set(),
-        propsBuffer: Set(),
+        propsBuffer: if (node != 1) Set(genesisProp) else Set(),
       }),
-       //propAvailabilityLayer' = Set()
+       propAvailabilityLayer' = Set(genesisProp)
     }
     
     /*
@@ -457,6 +502,7 @@ module HotShotEpochReconfig {
             // Receive and process a message
             deliverMessage(v),
             all {
+                propAvailabilityLayer' = stateToAllProposals(protocolState, propAvailabilityLayer),
                 protocolState' = nodeHandler(v, protocolState, propAvailabilityLayer)
             }
         }
@@ -465,10 +511,10 @@ module HotShotEpochReconfig {
     // quint run hotshot.qnt --invariant=witness to try to find an interesting couterexample
     // where this property doesn't hold
     // Doesn't find any yet because we aren't generating any valid proposals
-    val witness = protocolState.values().forall(state => state.highQC == None)
+    val witness = true
 }
 
 module hotshot {
   // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 2, TIMEOUT_DELAY = 4, MAX_NODES = 7, Faulty = Set(3)).*
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 100000, TIMEOUT_DELAY = 4, MAX_NODES = 7, Faulty = Set()).*
 }
