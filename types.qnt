@@ -11,7 +11,7 @@ module types {
     type VoteType = CertificateType            // type of vote (quorum or extended)
 
     // QC = Quorum Certificate
-    type Certificate = {which: CertificateType, signers: Set[int], view : int, block: Block}
+    type Certificate = {which: CertificateType, signers: Set[int], nextEpochSigners:Set[int]  ,view : int, block: Block}
     // Message Types
     type Vote = {sender: Node, which: VoteType, view: int, block: Block}             
     type Proposal = {sender: Node, which: ProposalType, view: int, block: Block, certificate: Certificate}

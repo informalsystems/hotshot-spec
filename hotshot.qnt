@@ -25,7 +25,7 @@ module HotShotEpochReconfig {
     var protocolState: ProtocolState
 
     //Maybe use this to store all the proposals seen
-    var propAvailabilityLayer: Set[Proposal]
+    val propAvailabilityLayer: Set[Proposal] = Set()
     
     
     //
@@ -33,9 +33,6 @@ module HotShotEpochReconfig {
     //
 
     pure def isInEpoch(node: Node, epoch: int): bool = {
-        // epochs start at 0
-        // Check if the node is part of the staking table for the given epoch
-        // If stakingTables list is empty or epoch is out of bounds, default to true
         if (epoch < 0 or epoch >= length(stakingTables)) false
         else stakingTables[epoch].contains(node)
     }
@@ -77,6 +74,65 @@ module HotShotEpochReconfig {
       // and a is built on top of b (directly or indirectly)
       // Since we're only storing block height currently, we check if a > b
       a > b
+    }
+
+    pure def proposal(node: Node, block: Block, view: int, which: ProposalType, cert: Certificate): Proposal = {
+        {sender: node, which: Quorum, view: view, block: block, certificate: cert}
+    }
+
+    pure def vote(node: Node, block: Block, view: int, which: VoteType): Vote = {
+        {sender: node, which: which, view: view, block: block}
+    }
+
+    pure def certificate(node: Node, which: CertificateType, view: int, block: Block, state: LocalState): Certificate = {
+        val lastBlock = (block % K == 0)
+        val epoch = block / K
+        val signers = state.votesMap.getOrElse((which, block, view, state.epoch), Set())
+        val basicCert = {which: which, signers: signers, nextEpochSigners: Set(),view: view, block: block}
+        if (lastBlock){
+            val extraSigners = state.votesMap.getOrElse((which, block, view, state.epoch + 1), Set())
+            {...basicCert, nextEpochSigners: extraSigners}
+        } else {
+            basicCert
+        }
+    }
+
+
+
+
+    pure def formProposal(node: Node, cert: Certificate): Proposal = {
+        if (cert.block % K == 0) {
+            if (cert.which == Extended) {
+                val newType = Quorum
+                val newBlock = cert.block + 1  // obtain a new block
+                proposal(node, newBlock, cert.view + 1, newType, cert)
+            }
+            else {
+                val newBlock = cert.block
+                val localState = protocolState.get(node)
+                val newType = 
+                    if (localState.highQC != None and localState.lockedQC != None) {
+                        val highQC = localState.highQC.unwrap()
+                        val lockedQC = localState.lockedQC.unwrap()
+                        if (and {highQC.block == lockedQC.block
+                            , cert.view - 1 == highQC.view
+                            , highQC.view - 1 == lockedQC.view}){
+                            Extended
+                        } else {
+                            Quorum
+                        }
+                    } else {
+                        Quorum
+                    }
+                val newView = cert.view + 1
+                proposal(node, newBlock, newView, newType, cert)
+            }
+        }
+        else {
+            val newBlock = cert.block + 1
+            val newView = cert.view + 1
+            proposal(node, newBlock, newView, Quorum, cert)
+        }
     }
 
     pure def isProposalSafe(proposal: Proposal, node:Node, state:LocalState): bool = and {
@@ -153,7 +209,7 @@ module HotShotEpochReconfig {
     // To be removed
     pure def certOrNeg(cert: Option[Certificate]): Certificate = {
         match(cert){
-            |None => {which: Quorum, signers: Set(), view: -1, block: -1}
+            |None => {which: Quorum, signers: Set(), nextEpochSigners: Set(),view: -1, block: -1}
             |Some(c) => c
         }
     }
@@ -279,69 +335,100 @@ module HotShotEpochReconfig {
               votes.size() > 0,
               nondet vote = oneOf(votes)
               deliverVote(v, vote),
-          }
+            }
+        }
+    }
+
+
+    pure def handleVote(vote: Vote, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
+        val state = pState.get(node)
+        
+        if (isLeader(node,state.view, state.epoch)){
+            if (isVoteValid(vote, node, state)){
+                val updatedState = accumulateSignatures(vote, node, state)
+                if (threshholdReached(vote, updatedState)){
+                    // Form a certificate
+                    val cert = certificate(node, vote.which, vote.view, vote.block, state)
+                    val stateWithCerts = updateCerts(updatedState, cert, allProps)
+                    val newView = cert.view + 1
+                    val newState = { ...stateWithCerts, view: newView }
+                    // Form a proposal
+                    val prop = proposal(node, vote.block, vote.view, vote.which, cert)
+                    // Update certificates based on the proposal's certificate
+                    broadcastProposal(pState.setBy(node, state => newState), prop)
+                } else {
+                    // Do nothing
+                    pState.setBy(node, state => updatedState)
+                }
+
+            } else {
+                // Do nothing
+                pState
+            }
+
+        }else {
+
+            if (isVoteValid(vote, node, state)){
+                val updatedState = accumulateSignatures(vote, node, state)
+                if (threshholdReached(vote, updatedState)){
+                    // Form a certificate
+                    val cert = certificate(node, vote.which, vote.view, vote.block, state)
+                    val stateWithCerts = updateCerts(updatedState, cert, allProps)
+                    val newView = cert.view + 1
+                    val newState = { ...stateWithCerts, view: newView }
+                    // Update certificates based on the proposal's certificate
+                    pState.setBy(node, state => newState)
+                } else {
+                    // Do nothing
+                    pState.setBy(node, state => updatedState)
+                }
+
+            } else {
+                // Do nothing
+                pState
+            } 
+
+        }
+    }
+
+    pure def handleProposal(prop: Proposal, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
+        val state = pState.get(node)
+        
+        if (isProposalValid(state, prop)){
+            val stateWithcerts = updateCerts(state, prop.certificate, allProps)
+            val newView = prop.view
+            val newState = { ...stateWithcerts, view: newView }
+            val newVote = vote(node, prop.block, prop.view, prop.which)
+            val newPstate = pState.setBy(node, state => newState)
+            sendVoteToLeader(newPstate, node, newVote)
+        } else {
+            pState
         }
     }
 
     
-    pure def nodeHandler(node: Node, state: LocalState, allProps: Set[Proposal]) : LocalState = {
+    pure def nodeHandler(node: Node, pState: ProtocolState, allProps: Set[Proposal]) : ProtocolState = {
+        val state = pState.get(node)
         val currentView = state.view
         val currentVotes = state.votes
         val currentProps = state.proposals
         
         if (q::debug("Processing votes", currentVotes.size() > 0)){
-            // Handle votes and update state
-            // If this node is a leader for the current view, it should collect votes
-            // and form certificates when enough votes are received
+            currentVotes.fold(pState, (updatedState, vote) => {
+                handleVote(vote, pState, node, allProps)})
             
-            // Process each vote
-            
-            currentVotes.fold(state, (updatedState, vote) => {
-                // Check if the vote is valid
-                if (isVoteValid(vote, node, updatedState)) {
-                    // Accumulate the vote
-                    val stateWithVote = accumulateSignatures(vote, vote.sender, updatedState)
-                    
-                    // Check if we have enough votes to form a certificate
-                    if (threshholdReached(vote, stateWithVote)) {
-                        // Create a new certificate
-                        val key = (vote.which, vote.block, vote.view, updatedState.epoch)
-                        val signers = stateWithVote.votesMap.getOrElse(key, Set())
-                        val newCert = { which: vote.which, signers: signers, view: vote.view, block: vote.block }
-                        
-                        // Update certificates
-                        updateCerts(stateWithVote, newCert, allProps)
-                    } else {
-                        stateWithVote
-                    }
-                } else {
-                    updatedState
-                }
-            })
         }
         else if (q::debug("Processing Props", currentProps.size() > 0)){
-            // Handle proposals and update state
-            // Process each proposal
-            currentProps.fold(state, (updatedState, prop) => {
-                // Check if the proposal is valid
-                if (isProposalValid(updatedState, prop)) {
-                    // Update certificates based on the proposal's certificate
-                    val stateWithCerts = updateCerts(updatedState, prop.certificate, allProps)
-                    
-                    // Update view to match the proposal's view
-                    { ...stateWithCerts, view: prop.view }
-                } else {
-                    updatedState
-                }
-            })
+            currentProps.fold(pState, (updatedState, prop) => {
+                handleProposal(prop, pState, node, allProps)})
         }
         else {
-            state
+            pState
         }
     }
     
 
-    action init = {
+    action init = all {
       protocolState' = 1.to(MAX_NODES).mapBy(node => {
         epoch: 0,
         view: 0,
@@ -353,7 +440,8 @@ module HotShotEpochReconfig {
         votesMap: Map(),
         votesBuffer: Set(),
         propsBuffer: Set(),
-      })
+      }),
+       //propAvailabilityLayer' = Set()
     }
     
     /*
@@ -369,9 +457,7 @@ module HotShotEpochReconfig {
             // Receive and process a message
             deliverMessage(v),
             all {
-                val nodeState = protocolState.get(v)
-                val updatedState = nodeHandler(v, nodeState, propAvailabilityLayer)
-                protocolState' = protocolState.put(v, updatedState)
+                protocolState' = nodeHandler(v, protocolState, propAvailabilityLayer)
             }
         }
     }
