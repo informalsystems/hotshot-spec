@@ -216,7 +216,7 @@ module HotShotEpochReconfig {
 
     pure def fetchProposal(cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
         //return the proposal that has the certificate
-        propDA.find(prop => prop.certificate == cert)
+        propDA.find(prop => prop.block == cert.block)
     }
 
     // To be removed
@@ -241,7 +241,7 @@ module HotShotEpochReconfig {
                 |None => state
                 |Some(p2) => {
                     val justify2HighQC = p2.certificate
-                    val updateLockedQC = and {highQC.view - 1 == justifyHighQC.view, justifyHighQC.view > lockedQC.view}
+                    val updateLockedQC =  and {highQC.view - 1 == justifyHighQC.view, justifyHighQC.view > lockedQC.view}
                     val updateDecidedQC = and {justifyHighQC.view - 1 == justify2HighQC.view, justify2HighQC.view > decidedQC.view}
 
                     if (updateLockedQC and updateDecidedQC){
