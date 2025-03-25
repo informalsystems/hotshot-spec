@@ -18,9 +18,9 @@ module HotShotEpochReconfig {
     pure val allNodes = 1.to(MAX_NODES)
     pure val stakingTables: List[StakingTable]=List(
     Set(1, 2, 4, 5),
-    Set(1, 2, 3, 6),
+    Set(1, 2, 3, 4),
     Set(1, 2, 4, 5),
-    Set(1, 2, 3, 6),
+    Set(1, 2, 3, 4),
     Set(1, 2, 4, 5),
     )
     val correct: Set[Node] = allNodes.exclude(Faulty)
@@ -108,23 +108,20 @@ module HotShotEpochReconfig {
 
 
 
-
-    pure def formProposal(node: Node, cert: Certificate): Proposal = {
+    pure def formProposal(node: Node, cert: Certificate, state: LocalState): Proposal = {
         if (cert.block % K == 0) {
             if (cert.which == Extended) {
-                val newType = Quorum
                 val newBlock = cert.block + 1  // obtain a new block
-                proposal(node, newBlock, cert.view + 1, newType, cert)
+                proposal(node, newBlock, state.view, Quorum, cert)
             }
             else {
                 val newBlock = cert.block
-                val localState = protocolState.get(node)
                 val newType = 
-                    if (localState.highQC != None and localState.lockedQC != None) {
-                        val highQC = localState.highQC.unwrap()
-                        val lockedQC = localState.lockedQC.unwrap()
+                    if (state.highQC != None and state.lockedQC != None) {
+                        val highQC = state.highQC.unwrap()
+                        val lockedQC = state.lockedQC.unwrap()
                         if (and {highQC.block == lockedQC.block
-                            , cert.view - 1 == highQC.view
+                            , state.view - 1 == highQC.view
                             , highQC.view - 1 == lockedQC.view}){
                             Extended
                         } else {
@@ -139,8 +136,7 @@ module HotShotEpochReconfig {
         }
         else {
             val newBlock = cert.block + 1
-            val newView = cert.view + 1
-            proposal(node, newBlock, newView, Quorum, cert)
+            proposal(node, newBlock, state.view, Quorum, cert)
         }
     }
 
@@ -520,15 +516,12 @@ module HotShotEpochReconfig {
 
     // quint run hotshot.qnt --invariant=witness to try to find an interesting couterexample
     // where this property doesn't hold
-    // No two correct replicas commit different blocks for the same block height.  (Every two staked nodes commit the same block for every block height h)
-    val chains = protocolState.values()
-    val witness = chains.fold(true, (acc, chain) => {
-        val equal = chains.forall(otherChain => chain.chain == otherChain.chain)
-        acc and equal
-    })
+    // are there any extended proposals?
+    val props = propAvailabilityLayer
+    val witness = props.forall(p => p.which != Extended)
 }
 
 module hotshot {
   // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 10, TIMEOUT_DELAY = 4, MAX_NODES = 7, Faulty = Set()).*
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 2, TIMEOUT_DELAY = 4, MAX_NODES = 5, Faulty = Set()).*
 }
