@@ -1,3 +1,4 @@
+// -*- mode: Bluespec; -*-
 module communication{
     import basicSpells.* from "spells/basicSpells"
     import types.* from "./types"
