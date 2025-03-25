@@ -130,7 +130,7 @@ module HotShotEpochReconfig {
                     } else {
                         Quorum
                     }
-                val newView = cert.view + 1
+                val newView = state.view
                 proposal(node, newBlock, newView, newType, cert)
             }
         }
@@ -374,7 +374,7 @@ module HotShotEpochReconfig {
                     val newView = cert.view + 1
                     val newState = { ...stateWithCerts, view: newView }
                     // Form a proposal
-                    val prop = formProposal(node, cert)
+                    val prop = formProposal(node, cert, newState)
                     // Update certificates based on the proposal's certificate
                     broadcastProposal(pState.setBy(node, state => newState), prop)
                 } else {
