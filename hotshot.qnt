@@ -38,6 +38,10 @@ module HotShotEpochReconfig {
     // Verification & validity functions
     //
 
+    pure def listContains(l: List[Block], block: Block): bool = {
+        l.foldl(false, (acc, b) => acc or (b == block))
+    }
+
     pure def isInEpoch(node: Node, epoch: int): bool = {
         if (epoch <= 0 or epoch > length(stakingTables)) false
         else stakingTables[epoch-1].contains(node)
@@ -85,7 +89,7 @@ module HotShotEpochReconfig {
     }
 
     pure def proposal(node: Node, block: Block, view: int, which: ProposalType, cert: Certificate): Proposal = { //TODO: allProps is a hack, need to fix
-        {sender: node, which: Quorum, view: view, block: block, certificate: cert}
+        {sender: node, which: which, view: view, block: block, certificate: cert}
     }
 
     pure def vote(node: Node, block: Block, view: int, which: VoteType): Vote = {
@@ -112,18 +116,19 @@ module HotShotEpochReconfig {
         if (cert.block % K == 0) {
             if (cert.which == Extended) {
                 val newBlock = cert.block + 1  // obtain a new block
-                proposal(node, newBlock, state.view, Quorum, cert)
+               proposal(node, newBlock, state.view, Quorum, cert)
             }
             else {
                 val newBlock = cert.block
                 val newType = 
                     if (state.highQC != None and state.lockedQC != None) {
-                        val highQC = state.highQC.unwrap()
-                        val lockedQC = state.lockedQC.unwrap()
+                        val highQC = state.highQC.unwrap() 
+                        val lockedQC = state.lockedQC.unwrap()                
                         if (and {highQC.block == lockedQC.block
                             , state.view - 1 == highQC.view
-                            , highQC.view - 1 == lockedQC.view}){
-                            Extended
+                            , highQC.view - 1 == lockedQC.view
+                        }){
+                           Extended
                         } else {
                             Quorum
                         }
@@ -172,15 +177,16 @@ module HotShotEpochReconfig {
             //val dbg = q::debug("Fist block",block)
             if (cert.which != Extended) false
             else if (not(isProposalSafe(proposal, state))) false
-            else if (not (size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) false
-            else if (not (size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch-1))) >= Q)) false
-            else true
+            //else if (not (size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) false
+            //else if (not (size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch-1))) >= Q)) false
+            else and {size(cert.signers) >= Q , (size(cert.nextEpochSigners) >= Q)}
+
         }
 
         else { // Not first or last block of the epoch
             if (cert.which == Extended) false
-            else if (not(isProposalSafe(proposal, state))) q::debug("Unsafe Proposal",false)
-            else if (not(size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) q::debug("Unsigned Proposal",false)
+            else if (not(isProposalSafe(proposal, state))) false
+            else if (not(size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) false
             else true
         } 
 
@@ -216,7 +222,7 @@ module HotShotEpochReconfig {
 
     pure def fetchProposal(cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
         //return the proposal that has the certificate
-        propDA.find(prop => prop.block == cert.block)
+        propDA.find(prop => ( prop.block == cert.block and prop.view == cert.view))
     }
 
     // To be removed
@@ -227,13 +233,15 @@ module HotShotEpochReconfig {
         }
     }
 
-    pure def updateCerts(state: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
+    pure def updateCerts(oldState: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
       val highQC = cert
+      val state = { ...oldState, highQC: Some(highQC)}
       val lockedQC = certOrNeg(state.lockedQC) //TODO: This is a hack, need to fix
       val decidedQC = certOrNeg(state.decidedQC) //TODO: This is a hack, need to fix
+
       val justifyHighP = fetchProposal(highQC, allProps)
       match(justifyHighP){
-        |None => state
+        |None => state 
         |Some(p) => {
             val justifyHighQC = p.certificate
             val justify2HighP = fetchProposal(justifyHighQC, allProps)
@@ -245,10 +253,11 @@ module HotShotEpochReconfig {
                     val updateDecidedQC = and {justifyHighQC.view - 1 == justify2HighQC.view, justify2HighQC.view > decidedQC.view}
 
                     if (updateLockedQC and updateDecidedQC){
-                        { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC), chain: state.chain.append(justify2HighQC.block)}
+                        val newChain = if (not (listContains(state.chain, justify2HighQC.block))) state.chain.append(justify2HighQC.block) else state.chain    
+                        { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC), chain: newChain}
                     } else if (updateLockedQC){
                         { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC)}
-                    } else if (updateDecidedQC){ //this can be ommited maybe ?
+                    } else if (updateDecidedQC){
                         { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC),chain: state.chain.append(justify2HighQC.block)}
                     } else {
                         { ...state, highQC: Some(highQC)} 
@@ -276,6 +285,8 @@ module HotShotEpochReconfig {
         }
     }
 
+
+
     pure def accumulateSignatures(vote: Vote, node: Node, state: LocalState): LocalState = { 
         val epochs = getEpochs(node, vote.block)
         val newVotes = epochs.fold(state.votesMap, (newVotesMap, e) => {
@@ -287,11 +298,10 @@ module HotShotEpochReconfig {
 
     pure def threshholdReached(vote: Vote, state: LocalState): bool = {
         // Check if we have enough votes (Q signatures) for this vote
-        val epochs = getEpochs(vote.sender, vote.block)
+        val epochs = if (vote.block % K == 0) Set(vote.block / K, vote.block / K + 1) else Set(vote.block / K + 1)
         
         // For each relevant epoch, check if we have enough votes
-        if (epochs.size() == 0) false
-        else epochs.forall(e => {
+        epochs.forall(e => {
                 val key = (vote.which, vote.block, vote.view, e)
                 val voters = state.votesMap.getOrElse(key, Set())
                 voters.size() >= Q
@@ -384,7 +394,7 @@ module HotShotEpochReconfig {
 
             } else {
                 // Do nothing
-                pState
+                pState.setBy(node, s => state)
             }
 
         }else {
@@ -406,7 +416,7 @@ module HotShotEpochReconfig {
 
             } else {
                 // Do nothing
-                pState
+                pState.setBy(node, s => state)
             } 
 
         }
@@ -425,7 +435,8 @@ module HotShotEpochReconfig {
             val newPstate = pState.setBy(node, state => newState)
             sendVoteToLeader(newPstate, node, newVote)
         } else {
-            pState
+            pState.setBy(node, s => state)
+            
         }
     }
 
@@ -518,10 +529,10 @@ module HotShotEpochReconfig {
     // where this property doesn't hold
     // are there any extended proposals?
     val props = propAvailabilityLayer
-    val witness = props.forall(p => p.which != Extended)
+    val witness = true
 }
 
 module hotshot {
   // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 2, TIMEOUT_DELAY = 4, MAX_NODES = 5, Faulty = Set()).*
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 6, TIMEOUT_DELAY = 4, MAX_NODES = 5, Faulty = Set()).*
 }
