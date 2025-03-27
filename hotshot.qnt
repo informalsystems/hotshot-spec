@@ -341,58 +341,9 @@ module HotShotEpochReconfig {
         sendVote(state, leaderToSend, vote)
     }
 
-    // Deliver a vote from the network buffer to the node
-    action deliverVote(n: Node): bool = {
-        val state = protocolState.get(n)
-        val votes = state.votesBuffer.union(allFaultyVotes)
-        all {
-          nondet votesToProcess = votes.powerset().oneOf()
-          nondet shouldHandle = Bool.oneOf()
-
-          //exclude vote from buffer and add to votes
-          val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(votes)
-          val newVotes = protocolState.get(n).votes.union(votes)
-
-          val stateWithMessages = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes })
-          val proposals = stateToAllProposals(stateWithMessages, propAvailabilityLayer)
-          all {
-              protocolState' = if (shouldHandle) nodeHandler(n, stateWithMessages, proposals) else stateWithMessages,
-              propAvailabilityLayer' = proposals,
-          }
-        }
-    }
-
-    // Deliver a proposal from the network buffer to the node
-    action deliverProposal(n: Node): bool ={
-        val state = protocolState.get(n)
-        val props = state.propsBuffer.union(allFaultyProposals)
-        all {
-          nondet propsToProcess = props.powerset().oneOf()
-          nondet shouldHandle = Bool.oneOf()
-
-          //exclude proposal from buffer and add to proposals
-          val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(propsToProcess)
-          val newProps = protocolState.get(n).proposals.union(propsToProcess)
-
-          val stateWithMessages = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps })
-          val proposals = stateToAllProposals(stateWithMessages, propAvailabilityLayer)
-          all {
-              protocolState' = if (shouldHandle) nodeHandler(n, stateWithMessages, proposals) else stateWithMessages,
-              propAvailabilityLayer' = proposals,
-          }
-        }
-    }
-
-    //Non-deterministically chooses a message type (proposal, vote) and delivers it.
-    action deliverMessage(n: Node): bool = any {
-      deliverVote(n),
-      deliverProposal(n),
-    }
-
     pure def handleVote(vote: Vote, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
-        
         val oldState = pState.get(node)
-        val state = { ...oldState, votes: oldState.votes.exclude(Set(vote)), voteArchive: oldState.voteArchive.union(Set(vote))}
+        val state = { ...oldState, votesBuffer: oldState.votesBuffer.exclude(Set(vote)), voteArchive: oldState.voteArchive.union(Set(vote))}
         val epoch = if (vote.block % K == 0) vote.block / K else vote.block / K + 1
         val NODES = pState.keys()
 
@@ -451,10 +402,10 @@ module HotShotEpochReconfig {
 
     pure def handleProposal(prop: Proposal, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
         val oldState = pState.get(node)
-        val state = { ...oldState, proposals: oldState.proposals.exclude(Set(prop)), proposalArchive: oldState.proposalArchive.union(Set(prop))}
+        val state = { ...oldState, propsBuffer: oldState.propsBuffer.exclude(Set(prop)), proposalArchive: oldState.proposalArchive.union(Set(prop))}
         
         if (isProposalValid(state, prop)){
-            val stateWithcerts = updateCerts(node,state, prop.certificate, allProps)
+            val stateWithcerts = updateCerts(node, state, prop.certificate, allProps)
             val newView = prop.view
             val newState = { ...stateWithcerts, view: newView}
             val newVote = vote(node, prop.block, prop.view, prop.which)
@@ -465,35 +416,28 @@ module HotShotEpochReconfig {
         }
     }
 
-    pure def nodeHandler(node: Node, pState: ProtocolState, allProps: Set[Proposal]) : ProtocolState = {
-        val state = pState.get(node)
-        val currentView = state.view
-        val currentVotes = state.votes
-        val currentProps = state.proposals
-
-        val pStateAfterVotes = if (currentVotes.size() > 0){
-          currentVotes.fold(pState, (updatedState, vote) => {
-              handleVote(vote, pState, node, allProps)
-          })
-
-        } else {
-          pState
-        }
-
-        if (currentProps.size() > 0){
-          currentProps.fold(pStateAfterVotes, (updatedState, prop) => {
-              handleProposal(prop, pStateAfterVotes, node, allProps)
-          })
-        } else {
-            pStateAfterVotes
-        }
-    }
-
-    // accumulate all proposals from the whole history 
+    // accumulate all proposals from the whole history
     pure def stateToAllProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
         pState.values().fold(allProps, (props, state) => {
-            props.union(state.proposals).union(state.propsBuffer)
+            props.union(state.propsBuffer)
         })
+    }
+
+    action receiveMessages(node: Node, votes: Set[Vote], proposals: Set[Proposal]): bool = {
+      val allProps = stateToAllProposals(protocolState, proposals)
+
+      val pState = votes.fold(protocolState, (updatedState, vote) => {
+        handleVote(vote, protocolState, node, allProps)
+      })
+
+      val pState1 = proposals.fold(pState, (updatedState, prop) => {
+        handleProposal(prop, pState, node, allProps)
+      })
+
+      all {
+        protocolState' = pState1,
+        propAvailabilityLayer' = allProps,
+      }
     }
     
     val genesisCert = {
@@ -520,8 +464,6 @@ module HotShotEpochReconfig {
         decidedQC: None,
         chain: List(),
         decidedQCArchive: List(),
-        proposals: Set(),
-        votes: Set(),
         proposalArchive: Set(),
         voteArchive: Set(),
         votesMap: Map(),
@@ -539,8 +481,16 @@ module HotShotEpochReconfig {
         ... Maybe separate handling messages from sending responses to have more atomic actions
     */
     action step = {
-        nondet v = oneOf(correct)
-        deliverMessage(v)
+        nondet n = oneOf(correct)
+        val state = protocolState.get(n)
+
+        val votes = state.votesBuffer.union(allFaultyVotes)
+        nondet votesToReceive = votes.powerset().oneOf()
+
+        val props = state.propsBuffer.union(allFaultyProposals)
+        nondet propsToReceive = props.powerset().oneOf()
+
+        receiveMessages(n, votesToReceive, propsToReceive)
     }
 
     // quint run hotshot.qnt --invariant=witness to try to find an interesting counterexample

@@ -33,8 +33,6 @@ module types {
         decidedQC: Option[Certificate], // decided proposal
         decidedQCArchive: List[Certificate], // decided proposals
         chain: List[Block], // chain of decided blocks
-        proposals: Set[Proposal],
-        votes: Set[Vote],
         proposalArchive: Set[Proposal],
         voteArchive: Set[Vote],
         //may be needed to accumulate votes 
