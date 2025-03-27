@@ -32,10 +32,8 @@ module types {
         highQC: Option[Certificate], // highest proposal known to be valid
         lockedQC: Option[Certificate], // locked proposal
         decidedQC: Option[Certificate], // decided proposal
+        decidedQCArchive: List[Certificate], // decided proposals
         chain: List[Block], // chain of decided blocks
-        //isActive: bool,
-        //isLeader: bool,
-        //leader: int,
         proposals: Set[Proposal],
         votes: Set[Vote],
         proposalArchive: Set[Proposal],

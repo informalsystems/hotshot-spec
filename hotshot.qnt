@@ -19,11 +19,22 @@ module HotShotEpochReconfig {
     pure val allNodes = 1.to(MAX_NODES)
     pure val stakingTables: List[StakingTable]=List(
     Set(1, 2, 4, 5),
-    Set(1, 2, 3, 4),
+    Set(1, 3, 6, 7),
     Set(1, 2, 4, 5),
     Set(1, 2, 3, 4),
     Set(1, 2, 4, 5),
     )
+    pure val Leaders = Map(
+        1 -> List(1, 2, 4, 5),
+        2 -> List(1, 3, 6, 7),
+        3 -> List(1, 2, 4, 5),
+        4 -> List(1, 2, 3, 4),
+        5 -> List(1, 2, 4, 5),
+        6 -> List(1, 2, 4, 5),
+        7 -> List(1, 2, 4, 5),
+        8 -> List(1, 2, 4, 5),
+    )
+
     val correct: Set[Node] = allNodes.exclude(Faulty)
     
     val allFaultyVotes : Set[Vote] = Set()
@@ -49,6 +60,7 @@ module HotShotEpochReconfig {
     
     // Return the leader for a given view and epoch
     pure def leader(view: int, epoch: int): int = {
+        //q::debug("leader", Leaders.get(epoch)[(view-1) % length(Leaders.get(epoch))])
         1
     }
 
@@ -230,7 +242,7 @@ module HotShotEpochReconfig {
         if (proposal.view < state.view) false
         else if (not(isSignatureValid(0))) false //Dummy signature check
         else if (not(isLeader(proposal.sender, proposal.view, proposal.block))) false
-        else if ((proposal.which == Extended) and (not(isExtendedProposalValid(proposal, state)))) false
+        else if ((proposal.which == Extended)) true//and (not(isExtendedProposalValid(proposal, state)))) false
         else if (not (isCertValid(proposal, state))) false
         else true
     }
@@ -249,7 +261,7 @@ module HotShotEpochReconfig {
         }
     }
 
-    pure def updateCerts(oldState: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
+    pure def updateCerts(node: Node, oldState: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
       val highQC = cert
       val state = { ...oldState, highQC: Some(highQC)}
       val lockedQC = certOrNeg(state.lockedQC) //TODO: This is a hack, did this to avoid  having many nested match statements 
@@ -269,11 +281,17 @@ module HotShotEpochReconfig {
                     val updateDecidedQC = and {justifyHighQC.view - 1 == justify2HighQC.view, justify2HighQC.view > decidedQC.view}
 
                     if (updateLockedQC and updateDecidedQC){
-                        val newChain = if (not (listContains(state.chain, justify2HighQC.block))) state.chain.append(justify2HighQC.block) else state.chain    
-                        { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC), chain: newChain}
+                        // This is helpful for debugging:
+
+                        // the last block of the epoch is commited by the nodes of epoch+1
+                        val epoch = justify2HighQC.block / K + 1
+                        val nodeInEpoch = isInEpoch(node, epoch)
+                        
+                        val newChain = if ((not (listContains(state.chain, justify2HighQC.block))) and nodeInEpoch) state.chain.append(justify2HighQC.block) else state.chain    
+                        { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC), chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
                     } else if (updateLockedQC){
                         { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC)}
-                    } else if (updateDecidedQC){
+                    } else if (updateDecidedQC){  
                         { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC),chain: state.chain.append(justify2HighQC.block)}
                     } else {
                         { ...state, highQC: Some(highQC)} 
@@ -373,6 +391,7 @@ module HotShotEpochReconfig {
         val oldState = pState.get(node)
         val state = { ...oldState, votes: oldState.votes.exclude(Set(vote)), voteArchive: oldState.voteArchive.union(Set(vote))}
         val epoch = if (vote.block % K == 0) vote.block / K else vote.block / K + 1
+        val NODES = pState.keys()
 
         if (isLeader(node,state.view, epoch)){
             if (isVoteValid(vote, node, state)){
@@ -381,13 +400,20 @@ module HotShotEpochReconfig {
                 if (threshholdReached(vote, stateWithSig)){
                     // Form a certificate
                     val cert = certificate(node, vote.which, vote.view, vote.block, stateWithSig)
-                    val stateWithCerts = updateCerts(stateWithSig, cert, allProps)
+                    val stateWithCerts = updateCerts(node ,stateWithSig, cert, allProps)
                     val newView = cert.view + 1
                     val newState = { ...stateWithCerts, view: newView }
                     // Form a proposal
                     val newProp = formProposal(node, cert, newState)
+                    val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
                     // Update certificates based on the proposal's certificate
-                    broadcastProposal(pState.setBy(node, state => newState), newProp)
+                    val receivers =
+                        if (newProp.block % K == 0){
+                            NODES.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
+                        } else {
+                            NODES.filter(n => isInEpoch(n, newPropEpoch))
+                        }
+                    multicastProposal(pState.setBy(node, state => newState), receivers, newProp)
                 } else {
                     // Do nothing
                     pState.setBy(node, state => stateWithSig)
@@ -403,7 +429,7 @@ module HotShotEpochReconfig {
                 if (threshholdReached(vote, stateWithSig)){
                     // Form a certificate
                     val cert = certificate(node, vote.which, vote.view, vote.block, stateWithSig)
-                    val stateWithCerts = updateCerts(stateWithSig, cert, allProps)
+                    val stateWithCerts = updateCerts(node, stateWithSig, cert, allProps)
                     val newView = cert.view + 1
                     val newState = { ...stateWithCerts, view: newView }
                     // Update certificates based on the proposal's certificate
@@ -425,7 +451,7 @@ module HotShotEpochReconfig {
         val state = { ...oldState, proposals: oldState.proposals.exclude(Set(prop)), proposalArchive: oldState.proposalArchive.union(Set(prop))}
         
         if (isProposalValid(state, prop)){
-            val stateWithcerts = updateCerts(state, prop.certificate, allProps)
+            val stateWithcerts = updateCerts(node,state, prop.certificate, allProps)
             val newView = prop.view
             val newState = { ...stateWithcerts, view: newView}
             val newVote = vote(node, prop.block, prop.view, prop.which)
@@ -490,6 +516,7 @@ module HotShotEpochReconfig {
         lockedQC: None,
         decidedQC: None,
         chain: List(),
+        decidedQCArchive: List(),
         proposals: Set(),
         votes: Set(),
         proposalArchive: Set(),
@@ -529,5 +556,5 @@ module HotShotEpochReconfig {
 
 module hotshot {
   // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 6, TIMEOUT_DELAY = 4, MAX_NODES = 5, Faulty = Set()).*
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, TIMEOUT_DELAY = 4, MAX_NODES = 8, Faulty = Set()).*
 }

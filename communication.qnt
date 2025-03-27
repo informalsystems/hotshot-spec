@@ -13,10 +13,14 @@ module communication{
     }
 
     pure def multicastProposal(state : ProtocolState, receivers: Set[Node], proposal: Proposal):ProtocolState = {
-        receivers.mapBy(r => {
-            val nodeState = state.get(r)
-            val newpropsBuffer = nodeState.propsBuffer.union(Set(proposal))
-            { ...nodeState, propsBuffer: newpropsBuffer }
+        state.keys().mapBy(p => {
+            if (receivers.contains(p)) {
+                val nodeState = state.get(p)
+                val newpropsBuffer = nodeState.propsBuffer.union(Set(proposal))
+                { ...nodeState, propsBuffer: newpropsBuffer }
+            } else {
+                state.get(p)
+            }
         })
     }
 
