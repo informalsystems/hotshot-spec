@@ -342,49 +342,52 @@ module HotShotEpochReconfig {
     }
 
     // Deliver a vote from the network buffer to the node
-    action deliverVote(n: Node, vote: Vote): bool ={
-        //exclude vote from buffer and add to votes
-        val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(Set(vote))
-        val newVotes = protocolState.get(n).votes.union(Set(vote))
+    action deliverVote(n: Node): bool = {
+        val state = protocolState.get(n)
+        val votes = state.votesBuffer.union(allFaultyVotes)
         all {
-            protocolState.get(n).votesBuffer.union(allFaultyVotes).contains(vote),
-            protocolState' = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes }),
-            propAvailabilityLayer' = propAvailabilityLayer //TODO: This is a hack, need to fix
+          nondet votesToProcess = votes.powerset().oneOf()
+          nondet shouldHandle = Bool.oneOf()
+
+          //exclude vote from buffer and add to votes
+          val newVotesBuffer = protocolState.get(n).votesBuffer.exclude(votes)
+          val newVotes = protocolState.get(n).votes.union(votes)
+
+          val stateWithMessages = protocolState.setBy(n, state => { ...state, votesBuffer: newVotesBuffer, votes: newVotes })
+          val proposals = stateToAllProposals(stateWithMessages, propAvailabilityLayer)
+          all {
+              protocolState' = if (shouldHandle) nodeHandler(n, stateWithMessages, proposals) else stateWithMessages,
+              propAvailabilityLayer' = proposals,
+          }
         }
     }
 
     // Deliver a proposal from the network buffer to the node
-    action deliverProposal(n: Node, prop: Proposal): bool ={
-        //exclude proposal from buffer and add to proposals
-        val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(Set(prop))
-        val newProps = protocolState.get(n).proposals.union(Set(prop))
+    action deliverProposal(n: Node): bool ={
+        val state = protocolState.get(n)
+        val props = state.propsBuffer.union(allFaultyProposals)
         all {
-            protocolState.get(n).propsBuffer.union(allFaultyProposals).contains(prop),
-            protocolState' = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps }),
-            propAvailabilityLayer' = propAvailabilityLayer //TODO: This is a hack, need to fix
+          nondet propsToProcess = props.powerset().oneOf()
+          nondet shouldHandle = Bool.oneOf()
+
+          //exclude proposal from buffer and add to proposals
+          val newPropsBuffer = protocolState.get(n).propsBuffer.exclude(propsToProcess)
+          val newProps = protocolState.get(n).proposals.union(propsToProcess)
+
+          val stateWithMessages = protocolState.setBy(n, state => { ...state, propsBuffer: newPropsBuffer, proposals: newProps })
+          val proposals = stateToAllProposals(stateWithMessages, propAvailabilityLayer)
+          all {
+              protocolState' = if (shouldHandle) nodeHandler(n, stateWithMessages, proposals) else stateWithMessages,
+              propAvailabilityLayer' = proposals,
+          }
         }
     }
 
     //Non-deterministically chooses a message type (proposal, vote) and delivers it.
-    action deliverMessage(v: Node): bool = {
-        val state = protocolState.get(v)
-
-        any {
-          val props = state.propsBuffer.union(allFaultyProposals)
-          all {
-              props.size() > 0,
-              nondet prop = oneOf(props)
-              deliverProposal(v, prop),
-          },
-          val votes = state.votesBuffer.union(allFaultyVotes)
-          all {
-              votes.size() > 0,
-              nondet vote = oneOf(votes)
-              deliverVote(v, vote),
-            }
-        }
+    action deliverMessage(n: Node): bool = any {
+      deliverVote(n),
+      deliverProposal(n),
     }
-
 
     pure def handleVote(vote: Vote, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
         
@@ -459,28 +462,30 @@ module HotShotEpochReconfig {
             sendVoteToLeader(newPstate, node, newVote)
         } else {
             pState.setBy(node, s => state)
-            
         }
     }
 
-    
     pure def nodeHandler(node: Node, pState: ProtocolState, allProps: Set[Proposal]) : ProtocolState = {
         val state = pState.get(node)
         val currentView = state.view
         val currentVotes = state.votes
         val currentProps = state.proposals
-        
-        if (currentVotes.size() > 0){
-            currentVotes.fold(pState, (updatedState, vote) => {
-                handleVote(vote, pState, node, allProps)})
-            
+
+        val pStateAfterVotes = if (currentVotes.size() > 0){
+          currentVotes.fold(pState, (updatedState, vote) => {
+              handleVote(vote, pState, node, allProps)
+          })
+
+        } else {
+          pState
         }
-        else if (currentProps.size() > 0){
-            currentProps.fold(pState, (updatedState, prop) => {
-                handleProposal(prop, pState, node, allProps)})
-        }
-        else {
-            pState
+
+        if (currentProps.size() > 0){
+          currentProps.fold(pStateAfterVotes, (updatedState, prop) => {
+              handleProposal(prop, pStateAfterVotes, node, allProps)
+          })
+        } else {
+            pStateAfterVotes
         }
     }
 
@@ -491,7 +496,6 @@ module HotShotEpochReconfig {
         })
     }
     
-
     val genesisCert = {
         which: Quorum, 
         signers: Set(1, 2, 4), 
@@ -510,7 +514,6 @@ module HotShotEpochReconfig {
 
     action init = all {
       protocolState' = 1.to(MAX_NODES).mapBy(node => {
-        epoch: 1,
         view: 0,
         highQC: None,
         lockedQC: None,
@@ -527,7 +530,7 @@ module HotShotEpochReconfig {
       }),
        propAvailabilityLayer' = Set(genesisProp)
     }
-    
+
     /*
     Execution Loop
     The execution step (step) randomly picks a validator and either:
@@ -537,21 +540,12 @@ module HotShotEpochReconfig {
     */
     action step = {
         nondet v = oneOf(correct)
-        any {
-            // Receive and process a message
-            deliverMessage(v),
-            all {
-                propAvailabilityLayer' = stateToAllProposals(protocolState, propAvailabilityLayer),
-                protocolState' = nodeHandler(v, protocolState, propAvailabilityLayer)
-            }
-        }
+        deliverMessage(v)
     }
 
-
-
-    // quint run hotshot.qnt --invariant=witness to try to find an interesting couterexample
+    // quint run hotshot.qnt --invariant=witness to try to find an interesting counterexample
     // where this property doesn't hold
-    val witness = true
+    val witness = protocolState.values().forall(s => s.decidedQC == None)
 }
 
 module hotshot {

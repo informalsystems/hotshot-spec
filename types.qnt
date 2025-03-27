@@ -26,7 +26,6 @@ module types {
 
     //// **State variables** (mutable state of the system)
     type LocalState = {
-        epoch: int, //TODO Is this necessary? based on the code, it seems like it can be calculated from block height  
         view: int,
         // TODO: Do we have an initial state for these, or do they have to be optional?
         highQC: Option[Certificate], // highest proposal known to be valid
