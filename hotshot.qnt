@@ -402,26 +402,6 @@ module HotShotEpochReconfig {
         }
     }
 
-    pure def nodeHandler(node: Node, pState: ProtocolState, allProps: Set[Proposal]) : ProtocolState = {
-        val state = pState.get(node)
-        val currentView = state.view
-        val currentVotes = state.votes
-        val currentProps = state.proposals
-        
-        if (currentVotes.size() > 0){
-            currentVotes.fold(pState, (updatedState, vote) => {
-                handleVote(vote, pState, node, allProps)})
-            
-        }
-        else if (currentProps.size() > 0){
-            currentProps.fold(pState, (updatedState, prop) => {
-                handleProposal(prop, pState, node, allProps)})
-        }
-        else {
-            pState
-        }
-    }
-
     pure def stateToAllProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
         pState.values().fold(allProps, (props, state) => {
             props.union(state.propsBuffer)
