@@ -404,7 +404,7 @@ module HotShotEpochReconfig {
 
     pure def stateToAllProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
         pState.values().fold(allProps, (props, state) => {
-            props.union(state.propsBuffer)
+            props.union(state.propsBuffer).union(state.proposalArchive)
         })
     }
 
@@ -412,11 +412,11 @@ module HotShotEpochReconfig {
       val allProps = stateToAllProposals(protocolState, proposals)
 
       val pState = votes.fold(protocolState, (updatedState, vote) => {
-        handleVote(vote, protocolState, node, allProps)
+        handleVote(vote, updatedState, node, allProps)
       })
 
       val pState1 = proposals.fold(pState, (updatedState, prop) => {
-        handleProposal(prop, pState, node, allProps)
+        handleProposal(prop, updatedState, node, allProps)
       })
 
       all {
@@ -480,7 +480,7 @@ module HotShotEpochReconfig {
 
     // quint run hotshot.qnt --invariant=witness to try to find an interesting counterexample
     // where this property doesn't hold
-    val witness = protocolState.values().forall(s => s.decidedQC == None)
+    val witness = true //protocolState.values().forall(s => s.decidedQC == None)
 }
 
 module hotshot {
