@@ -30,10 +30,10 @@ module types {
         lockedQC: Option[Certificate], // locked proposal
         decidedQC: Option[Certificate], // decided proposal
         decidedQCArchive: List[Certificate], // decided proposals
-        chain: List[Block], // chain of decided blocks
+        chain: List[Block], // chain of blocks
+        highQCArchive : Block -> Certificate, // chain of decided blocks
         proposalArchive: Set[Proposal],
         voteArchive: Set[Vote],
-        acceptedProposals: Set[Proposal], // proposals accepted by the node
         //may be needed to accumulate votes 
         votesMap: (VoteType, Block, int, int) -> Set[Node], //(type, data, view, epoch) -> voters
         // Network buffer
