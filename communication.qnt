@@ -38,10 +38,14 @@ module communication{
     }
 
     pure def multicastVote(state : ProtocolState, receivers: Set[Node], vote: Vote):ProtocolState = {
-        receivers.mapBy(r => {
-            val nodeState = state.get(r)
-            val newvotesBuffer = nodeState.votesBuffer.union(Set(vote))
-            { ...nodeState, votesBuffer: newvotesBuffer }
+        state.keys().mapBy(p => {
+            if (receivers.contains(p)) {
+                val nodeState = state.get(p)
+                val newpropsBuffer = nodeState.votesBuffer.union(Set(vote))
+                { ...nodeState, votesBuffer: newpropsBuffer }
+            } else {
+                state.get(p)
+            }
         })
     }
 
