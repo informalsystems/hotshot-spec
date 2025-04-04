@@ -228,12 +228,12 @@ module HotShotEpochReconfig {
         val highQC = state.highQC.unwrap()
 
         or {
-        and {
+        and {//this is a trick to avoid a node updating it's QC and rejecting it's own proposal
           proposal.sender == node,
           proposal.block == proposal.certificate.block,
           proposal.block == highQC.block,
           proposal.view - 1 == proposal.certificate.view,
-          proposal.certificate.view == highQC.view //this is a trick to avoid a node updating it's QC and rejecting it's own proposal
+          proposal.certificate.view == highQC.view 
         },
         and {
           proposal.block == proposal.certificate.block,
@@ -319,7 +319,16 @@ module HotShotEpochReconfig {
                                 chain.append(c.block)
                             })
 
-                            { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC) , highQCArchive:newHighQCArchive, chain: newChain}//, chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
+                            val chainMap = newBlocks.foldl(state.chain2, (cm, c) => {
+                                val epoch = c.block / K + 1
+                                val x = cm.has(epoch)
+                                if (x) cm.setBy(epoch, chain => chain.append(c.block))
+                                else cm.put(epoch, List(c.block))
+                            })
+                            val goodEpochs = chainMap.keys().filter(e => not (isInEpoch(node, e)))
+                            val chainMap2 = chainMap.mapRemoveAll(goodEpochs)
+
+                            { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC) , highQCArchive:newHighQCArchive, chain2: chainMap2}//, chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
                         } else if (updateLockedQC){
                             { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC)}
                         } else if (updateDecidedQC){  
@@ -331,8 +340,16 @@ module HotShotEpochReconfig {
                             val newChain = newBlocks.foldl(state.chain, (chain, c) => {
                                 chain.append(c.block)
                             })
-   
-                            { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC), highQCArchive:newHighQCArchive, chain: newChain}//, chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
+
+                            val chainMap = newBlocks.foldl(state.chain2, (cm, c) => {
+                                val epoch = c.block / K + 1
+                                val x = cm.has(epoch)
+                                if (x) cm.setBy(epoch, chain => chain.append(c.block))
+                                else cm.put(epoch, List(c.block))
+                            })
+                            val goodEpochs = chainMap.keys().filter(e => not (isInEpoch(node, e)))
+                            val chainMap2 = chainMap.mapRemoveAll(goodEpochs)
+                            { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC), highQCArchive:newHighQCArchive, chain2: chainMap2}//, chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
                         } else {
                             { ...state, highQC: Some(highQC)} 
                     } 
@@ -432,10 +449,7 @@ module HotShotEpochReconfig {
             val newState = { ...stateWithcerts, view: newView}
             val newVote = vote(node, prop.block, prop.view, prop.which)
             val newPstate = pState.setBy(node, state => newState)
-            //sendVoteToLeader(newPstate, node, newVote) 
-            
-            //update this by sending to the nodes in epoch e+1 when needed
-            
+
             if (prop.which == Extended){ //if the prop is an extended vote
                 val receivers = allNodes.filter(n => isInEpoch(n, prop.block / K + 1))
                 multicastVote(newPstate, receivers, newVote)
@@ -521,12 +535,13 @@ module HotShotEpochReconfig {
         //val NewProp = formProposal(newLeader, highestQC, newLeaderState)
         
         val newProp0 = formProposal(newLeader, highestQC, newLeaderState)
-        val newProp = if (newProp0.which == Extended) {
+
+        val newProp = if (newProp0.which == Extended) { //special handling to restart the 3 successive certs procedure
             proposal(newLeader, highestQC.block, highestView + 1, Quorum, highestQC)
         } else {
             newProp0
         }
-        //if (highestQC.which == Extended) proposal(newLeader, highestQC.block,  highestView + 1, Quorum,  highestQC)
+        
         val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
         val receivers =
             if (newProp.block % K == 0){
@@ -566,6 +581,7 @@ module HotShotEpochReconfig {
         lockedQC: None,
         decidedQC: None,
         chain: List(),
+        chain2: Map(),
         decidedQCArchive: List(),
         proposalArchive: Set(),
         voteArchive: Set(),
@@ -586,12 +602,13 @@ module HotShotEpochReconfig {
         Triggers a timeout (viewSync).
     */
     action step = any {
-        // Nondeterministically choose between normal message handling and timeout
-        // view syncs only happen after the first block was committed
-        val odds = 1.to(200)
+        // Nondeterministically choose between normal message handling and view synchronization
+        
+
+        val odds = 1.to(100)
         nondet timeout = oneOf(odds)
 
-        if (timeout == 100){
+        if (timeout == 50){
             viewSync
         }
         else{   
@@ -612,9 +629,9 @@ module HotShotEpochReconfig {
 
     // quint run hotshot.qnt --invariant=noDeadlock to try to find an interesting counterexample
     // where this property doesn't hold
+
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
-    
-    // Check that there is no deadlock when timeout mechanism is enabled
+    // check that if a node commits a block in an epoch, there is no other commited block at the same height (use the chain2 map from epoch -> block)
 }
 
 module hotshotTimeout {

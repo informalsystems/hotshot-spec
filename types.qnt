@@ -31,6 +31,7 @@ module types {
         decidedQC: Option[Certificate], // decided proposal
         decidedQCArchive: List[Certificate], // decided proposals
         chain: List[Block], // chain of blocks
+        chain2: int -> List[Block],
         highQCArchive : Block -> Certificate, // chain of decided blocks
         proposalArchive: Set[Proposal],
         voteArchive: Set[Vote],
