@@ -1,6 +1,7 @@
 // -*- mode: Bluespec; -*-
 module HotShotEpochReconfig {
     import types.* from "./types"
+    import utils.* from "./utils"
 
     import communication.* from "./communication"
 
@@ -8,15 +9,15 @@ module HotShotEpochReconfig {
     import rareSpells.* from "spells/rareSpells"
 
     //// **Constants** (system parameters)
-    const N: int                      // total number of nodes (participants in consensus)
-    const F: int                      // fault tolerance threshold (max number of Byzantine faults)
-    const Q: int         /// quorum size (2F+1 signatures needed for decisions)
-    const K: int         // duration of an epoch
-    const MAX_NODES: int              // size of the universe of node IDs (>= N, to allow new nodes joining)
+    const N: int         // total number of nodes (participants in consensus)
+    const F: int         // fault tolerance threshold
+    const Q: int         // quorum size (2F+1 signatures needed for decisions)
+    const K: int         // epoch duration
+    const MAX_nodes: int // size of the universe of node IDs (>= N, to allow new nodes joining)
     const FAULTY: Set[Node]
 
     //  Revise, this is only for protoyping
-    pure val allNodes = 1.to(MAX_NODES)
+    pure val allNodes = 1.to(MAX_nodes)
     pure val correct: Set[Node] = allNodes.exclude(FAULTY)
 
     pure val stakingTables: List[StakingTable]=List(
@@ -33,16 +34,10 @@ module HotShotEpochReconfig {
     var protocolState: ProtocolState
 
     //Maybe use this to store all the proposals seen
-    var propAvailabilityLayer: Set[Proposal]
+    var allProposals: Set[Proposal]
     
     
-    //TODO: @Gabriela, is there a function for this in quint?
-    pure def listContains(l: List[Block], block: Block): bool = {
-        l.foldl(false, (acc, b) => acc or (b == block))
-    }
-
     // Check if a node is part of the staking table for a given epoch
-    // TODO add staking table to arguments
     pure def isInEpoch(node: Node, epoch: int): bool = {
         val epochIndex = (epoch - 1) % length(stakingTables)
         if (epoch <= 0) false
@@ -228,19 +223,19 @@ module HotShotEpochReconfig {
         val highQC = state.highQC.unwrap()
 
         or {
-        and {//this is a trick to avoid a node updating it's QC and rejecting it's own proposal
-          proposal.sender == node,
-          proposal.block == proposal.certificate.block,
-          proposal.block == highQC.block,
-          proposal.view - 1 == proposal.certificate.view,
-          proposal.certificate.view == highQC.view 
-        },
-        and {
-          proposal.block == proposal.certificate.block,
-          proposal.block == highQC.block,
-          proposal.view - 1 == proposal.certificate.view,
-          proposal.certificate.view - 1 == highQC.view
-        }
+            and {//this is a trick to avoid a node updating it's QC and rejecting it's own proposal
+                proposal.sender == node,
+                proposal.block == proposal.certificate.block,
+                proposal.block == highQC.block,
+                proposal.view - 1 == proposal.certificate.view,
+                proposal.certificate.view == highQC.view 
+            },
+            and {
+                proposal.block == proposal.certificate.block,
+                proposal.block == highQC.block,
+                proposal.view - 1 == proposal.certificate.view,
+                proposal.certificate.view - 1 == highQC.view
+            }
         }
     }
 
@@ -254,37 +249,17 @@ module HotShotEpochReconfig {
         else true
     }
 
-
-    pure def fetchProposal(cert:Certificate, propDA: Set[Proposal]): Option[Proposal] = {
-        //return the proposal that has the certificate
-        propDA.find(prop => ( prop.block == cert.block and prop.view == cert.view))
-    }
-
-    // To be removed
-    pure def certOrNeg(cert: Option[Certificate]): Certificate = {
-        match(cert){
-            |None => {which: Quorum, signers: Set(), nextEpochSigners: Set(),view: -1, block: -1}
-            |Some(c) => c
-        }
-    }
-
-    pure def updateHighQCMap(highQC: Certificate, archive: Block -> Certificate): Block -> Certificate = {
-        val exist = archive.keys().contains(highQC.block)
-        if (exist){
-            val oldQC = archive.get(highQC.block)
-            if (highQC.view > oldQC.view) archive.set(highQC.block, highQC)
-            else archive
-        } else {
-            archive.put(highQC.block, highQC)
-        }
-    }
-
-    pure def commitedBlocks(newDecidedQC: Certificate, oldDecidedQC: Certificate, archive: Block -> Certificate): List[Certificate] = {
-        val formedBlocks = archive.keys().filter(b => (b > oldDecidedQC.block) and (b <= newDecidedQC.block))
-        // sort by view number and return the list of blocks
-        val keptCerts =formedBlocks.map(b => archive.get(b))
-        val keptCertsList = keptCerts.fold(List(), (acc, c) => acc.append(c))
-        sortList(keptCertsList, (a,b) => a.view < b.view)
+    
+    // utility function to update the stored chain
+    pure def updateChain(node: Node,oldChain: int -> List[Block], newBlocks: List[Certificate]): int -> List[Block] = {
+        val chainMap = newBlocks.foldl(oldChain, (cm, c) => {
+            val epoch = c.block / K + 1
+            val x = cm.has(epoch)
+            if (x) cm.setBy(epoch, chain => chain.append(c.block))
+            else cm.put(epoch, List(c.block))
+        })
+        val goodEpochs = chainMap.keys().filter(e => not (isInEpoch(node, e)))
+        chainMap.mapRemoveAll(goodEpochs)
     }
 
     pure def updateCerts(node: Node, oldState: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
@@ -307,28 +282,14 @@ module HotShotEpochReconfig {
                         val updateDecidedQC = and {justifyHighQC.view - 1 == justify2HighQC.view, justify2HighQC.view > decidedQC.view}
 
                         if (updateLockedQC and updateDecidedQC){
-                            // This is helpful for debugging:
 
                             // the last block of the epoch is commited by the nodes of epoch+1
                             val epoch = justify2HighQC.block / K + 1
                             val nodeInEpoch = isInEpoch(node, epoch)
-
                             val newBlocks = commitedBlocks(justify2HighQC, decidedQC, state.highQCArchive)
                             val newHighQCArchive = mapRemoveAll(state.highQCArchive, toSet(newBlocks).map(c => c.block))
-                            val newChain = newBlocks.foldl(state.chain, (chain, c) => {
-                                chain.append(c.block)
-                            })
-
-                            val chainMap = newBlocks.foldl(state.chain2, (cm, c) => {
-                                val epoch = c.block / K + 1
-                                val x = cm.has(epoch)
-                                if (x) cm.setBy(epoch, chain => chain.append(c.block))
-                                else cm.put(epoch, List(c.block))
-                            })
-                            val goodEpochs = chainMap.keys().filter(e => not (isInEpoch(node, e)))
-                            val chainMap2 = chainMap.mapRemoveAll(goodEpochs)
-
-                            { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC) , highQCArchive:newHighQCArchive, chain2: chainMap2}//, chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
+                            val chainMap = updateChain(node, state.chain2, newBlocks)
+                            { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC) , highQCArchive:newHighQCArchive, chain2: chainMap}
                         } else if (updateLockedQC){
                             { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC)}
                         } else if (updateDecidedQC){  
@@ -337,19 +298,8 @@ module HotShotEpochReconfig {
                             
                             val newBlocks = commitedBlocks(justify2HighQC, decidedQC, state.highQCArchive)
                             val newHighQCArchive = mapRemoveAll(state.highQCArchive, toSet(newBlocks).map(c => c.block))
-                            val newChain = newBlocks.foldl(state.chain, (chain, c) => {
-                                chain.append(c.block)
-                            })
-
-                            val chainMap = newBlocks.foldl(state.chain2, (cm, c) => {
-                                val epoch = c.block / K + 1
-                                val x = cm.has(epoch)
-                                if (x) cm.setBy(epoch, chain => chain.append(c.block))
-                                else cm.put(epoch, List(c.block))
-                            })
-                            val goodEpochs = chainMap.keys().filter(e => not (isInEpoch(node, e)))
-                            val chainMap2 = chainMap.mapRemoveAll(goodEpochs)
-                            { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC), highQCArchive:newHighQCArchive, chain2: chainMap2}//, chain: newChain, decidedQCArchive: state.decidedQCArchive.append(justify2HighQC)}
+                            val chainMap = updateChain(node, state.chain2, newBlocks)
+                            { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC), highQCArchive:newHighQCArchive, chain2: chainMap}
                         } else {
                             { ...state, highQC: Some(highQC)} 
                     } 
@@ -402,7 +352,7 @@ module HotShotEpochReconfig {
         val oldState = pState.get(node)
         val state = { ...oldState, votesBuffer: oldState.votesBuffer.exclude(Set(vote)), voteArchive: oldState.voteArchive.union(Set(vote))}
         val epoch = if (vote.block % K == 0) vote.block / K else vote.block / K + 1
-        val NODES = pState.keys()
+        val nodes = pState.keys()
 
         
         if (isVoteValid(vote, node, state)){
@@ -421,9 +371,9 @@ module HotShotEpochReconfig {
                     // Update certificates based on the proposal's certificate
                     val receivers =
                         if (newProp.block % K == 0){
-                            NODES.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
+                            nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
                         } else {
-                            NODES.filter(n => isInEpoch(n, newPropEpoch))
+                            nodes.filter(n => isInEpoch(n, newPropEpoch))
                         }
                     multicastProposal(pState.setBy(node, state => newState), receivers, newProp)
                 } else {
@@ -442,6 +392,7 @@ module HotShotEpochReconfig {
     pure def handleProposal(prop: Proposal, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
         val oldState = pState.get(node)
         val state = { ...oldState, propsBuffer: oldState.propsBuffer.exclude(Set(prop)), proposalArchive: oldState.proposalArchive.union(Set(prop))}
+        val nodes = pState.keys()
         
         if (isProposalValid(state, prop, node)){
             val stateWithcerts = updateCerts(node, state, prop.certificate, allProps)
@@ -451,19 +402,18 @@ module HotShotEpochReconfig {
             val newPstate = pState.setBy(node, state => newState)
 
             if (prop.which == Extended){ //if the prop is an extended vote
-                val receivers = allNodes.filter(n => isInEpoch(n, prop.block / K + 1))
+                val receivers = nodes.filter(n => isInEpoch(n, prop.block / K + 1))
                 multicastVote(newPstate, receivers, newVote)
             } else {    
                 sendVoteToLeader(newPstate, node, newVote)
             }
             
-
         } else {
             pState.setBy(node, s => state)
         }
     }
 
-    pure def stateToAllProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
+    pure def accumulateProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
         pState.values().fold(allProps, (props, state) => {
             props.union(state.propsBuffer).union(state.proposalArchive)
         })
@@ -477,17 +427,8 @@ module HotShotEpochReconfig {
         })
     }
 
-    // Update a node's state to a new view
-    pure def updateToNewView(state: LocalState, newView: int): LocalState = {
-        if (newView > state.view) {
-            {...state, view: newView}
-        } else {
-            state
-        }
-    }
-
     action receiveMessages(node: Node, votes: Set[Vote], proposals: Set[Proposal]): bool = {
-      val allProps = stateToAllProposals(protocolState, proposals)
+      val allProps = accumulateProposals(protocolState, proposals)
 
       val pState = votes.fold(protocolState, (updatedState, vote) => {
         handleVote(vote, updatedState, node, allProps)
@@ -499,20 +440,24 @@ module HotShotEpochReconfig {
 
       all {
         protocolState' = pState1,
-        propAvailabilityLayer' = allProps,
+        allProposals' = allProps,
       }
     }
     
-    // New action to handle timeouts by synchronizing all correct nodes to the highest view
+    // New action to simulate viewSync propotocol by synchronizing all correct nodes to the highest view
     action viewSync: bool = {
-
+        
+        // find the highest view among all correct nodes
         val highestView = getHighestView(protocolState)
-        val updatedState = allNodes.fold(protocolState, (pState, node) => {
+        val nodes = protocolState.keys()
+
+        // update the state of all nodes to the highest view
+        val updatedState = nodes.fold(protocolState, (pState, node) => {
             val newLocalState = updateToNewView(pState.get(node), highestView)
             pState.setBy(node, s => newLocalState)
         })
 
-
+        // leader collects the highest QC from all correct nodes
         val highestQC = correct.fold(genesisCert, (maxQC, node) => {
             val nodeState = updatedState.get(node)
             val nodeQC = nodeState.highQC
@@ -523,20 +468,20 @@ module HotShotEpochReconfig {
                 }
             }
         })
-        val lastCertifiedBlock = highestQC.block
 
+        val lastCertifiedBlock = highestQC.block
         val epoch = if (lastCertifiedBlock % K == 0) lastCertifiedBlock / K else lastCertifiedBlock / K + 1
+        
+        // leader of the next view proceeds to propose a new block
         val newLeader = leader(highestView + 1, epoch)
         // update the view of the new leader
         val newLeaderState = {...updatedState.get(newLeader), view: highestView + 1}
-        val updatedState2 = updatedState.setBy(newLeader, state => newLeaderState)
-
-        // update the cert to the 
-        //val NewProp = formProposal(newLeader, highestQC, newLeaderState)
+        val updatedState2 = updatedState.setBy(newLeader, state => {...updatedState.get(newLeader), view: highestView + 1})
         
+        // form a new proposal
         val newProp0 = formProposal(newLeader, highestQC, newLeaderState)
-
-        val newProp = if (newProp0.which == Extended) { //special handling to restart the 3 successive certs procedure
+        // if the new proposal is an extended proposal, restart the 3 successive certs procedure
+        val newProp = if (newProp0.which == Extended) { 
             proposal(newLeader, highestQC.block, highestView + 1, Quorum, highestQC)
         } else {
             newProp0
@@ -545,15 +490,15 @@ module HotShotEpochReconfig {
         val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
         val receivers =
             if (newProp.block % K == 0){
-                allNodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
+                nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
             } else {
-                allNodes.filter(n => isInEpoch(n, newPropEpoch))
+                nodes.filter(n => isInEpoch(n, newPropEpoch))
             }
         val updatedStateWithProposal = multicastProposal(updatedState2, receivers, newProp)
 
         all {
             protocolState' = updatedStateWithProposal,
-            propAvailabilityLayer' = propAvailabilityLayer.union(Set(newProp))
+            allProposals' = allProposals.union(Set(newProp))
         }
     }
     
@@ -574,7 +519,7 @@ module HotShotEpochReconfig {
     }
 
     action init = all {
-      protocolState' = 1.to(MAX_NODES).mapBy(node => {
+      protocolState' = 1.to(MAX_nodes).mapBy(node => {
         view: 0,
         highQC: None,
         highQCArchive: Map(),
@@ -589,7 +534,7 @@ module HotShotEpochReconfig {
         votesBuffer: Set(),
         propsBuffer: Set(genesisProp),
       }),
-       propAvailabilityLayer' = Set(genesisProp)
+       allProposals' = Set(genesisProp)
     }
 
 
@@ -602,16 +547,13 @@ module HotShotEpochReconfig {
         Triggers a timeout (viewSync).
     */
     action step = any {
-        // Nondeterministically choose between normal message handling and view synchronization
-        
-
+        // Nondeterministically choose between normal message handling and view synchronization with a skew towards normal steps
         val odds = 1.to(100)
         nondet timeout = oneOf(odds)
 
         if (timeout == 50){
             viewSync
-        }
-        else{   
+        } else {   
             nondet n = oneOf(correct)
             val state = protocolState.get(n)
 
@@ -627,14 +569,12 @@ module HotShotEpochReconfig {
 
 
 
-    // quint run hotshot.qnt --invariant=noDeadlock to try to find an interesting counterexample
-    // where this property doesn't hold
-
+    // quint run hotshot.qnt --invariant=deadlock to try to find an interesting counterexample
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
     // check that if a node commits a block in an epoch, there is no other commited block at the same height (use the chain2 map from epoch -> block)
 }
 
 module hotshotTimeout {
   // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, MAX_NODES = 8, FAULTY = Set()).*
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, MAX_nodes = 8, FAULTY = Set()).*
 }
