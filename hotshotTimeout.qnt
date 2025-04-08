@@ -13,15 +13,15 @@ module HotShotEpochReconfig {
     const F: int         // fault tolerance threshold
     const Q: int         // quorum size (2F+1 signatures needed for decisions)
     const K: int         // epoch duration
-    const MAX_nodes: int // size of the universe of node IDs (>= N, to allow new nodes joining)
+    const MAX_NODES: int // size of the universe of node IDs (>= N, to allow new nodes joining)
     const FAULTY: Set[Node]
 
     //  Revise, this is only for protoyping
-    pure val allNodes = 1.to(MAX_nodes)
+    pure val allNodes = 1.to(MAX_NODES)
     pure val correct: Set[Node] = allNodes.exclude(FAULTY)
 
     pure val stakingTables: List[StakingTable]=List(
-        Set(1, 2, 4, 5),
+        Set(1, 2, 3, 4),
         Set(1, 2, 6, 7),
         Set(1, 2, 4, 5),
         Set(1, 5, 6, 8),
@@ -519,7 +519,7 @@ module HotShotEpochReconfig {
     }
 
     action init = all {
-      protocolState' = 1.to(MAX_nodes).mapBy(node => {
+      protocolState' = 1.to(MAX_NODES).mapBy(node => {
         view: 0,
         highQC: None,
         highQCArchive: Map(),
@@ -551,7 +551,7 @@ module HotShotEpochReconfig {
         val odds = 1.to(100)
         nondet timeout = oneOf(odds)
 
-        if (timeout == 50){
+        if (timeout == 500){
             viewSync
         } else {   
             nondet n = oneOf(correct)
@@ -571,10 +571,11 @@ module HotShotEpochReconfig {
 
     // quint run hotshot.qnt --invariant=deadlock to try to find an interesting counterexample
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
-    // check that if a node commits a block in an epoch, there is no other commited block at the same height (use the chain2 map from epoch -> block)
+    // find an invariant that is violated when a transition into epoch 2 happens, ie block K+1 is commited
+    val optimalRun = not (protocolState.values().exists(s => s.lockedQC != None and s.lockedQC.unwrap().block == K + 1))
 }
 
 module hotshotTimeout {
   // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, MAX_nodes = 8, FAULTY = Set()).*
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, MAX_NODES = 8, FAULTY = Set()).*
 }
