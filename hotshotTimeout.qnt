@@ -6,6 +6,7 @@ module HotShotEpochReconfig {
     import communication.* from "./communication"
 
     import basicSpells.* from "spells/basicSpells"
+    import commonSpells.* from "spells/commonSpells"
     import rareSpells.* from "spells/rareSpells"
 
     //// **Constants** (system parameters)
@@ -573,6 +574,40 @@ module HotShotEpochReconfig {
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
     // find an invariant that is violated when a transition into epoch 2 happens, ie block K+1 is commited
     val optimalRun = not (protocolState.values().exists(s => s.lockedQC != None and s.lockedQC.unwrap().block == K + 1))
+
+    //missing high QC conds
+    val scenario1 = not (and {
+        // Nodes 1, 2, 3, 4 are in e; nodes 1, 5, 6, 7 are in e+1. Note that node 1 is in both epochs
+        // leader 1 - send proposal P(B_k, C(B_k')) to 1..7 <-> all nodes in e+1 and e have the proposal in their archives
+        {
+            val nodesInEpoch = protocolState.keys().filter(n => isInEpoch(n, 1) or isInEpoch(n, 2))
+            nodesInEpoch.forall(n => {
+                val nodeState = protocolState.get(n)
+                val props = nodeState.proposalArchive
+                props.exists(p => p.block == K and p.certificate.block == K-1 and p.certificate.view == 4 and p.view == 5)
+            })
+        },
+        // View v+1, leader 2 – 1..7 sign and send vote V_v(B_k) to 2 and store C(B_k') as highQC – 
+        {
+            val v1 = 6
+            val ldr = leader(v1, 1)
+            val nodesInEpoch = protocolState.keys().filter(n => isInEpoch(n, 1) or isInEpoch(n, 2))
+            // the leader votes archive contains the votes from the nodes in e and e+1
+            val votesReceived = protocolState.get(ldr).voteArchive.filter(v => v.block == K and v.view == 5 and nodesInEpoch.contains(v.sender)).size() == 4
+            votesReceived
+        },
+        // 2 forms QC (first certificate) and sends P_{v+1}(B_k, C_v(B_k)) to 1..7
+        {
+            val nodesInEpoch = protocolState.keys().filter(n => isInEpoch(n, 1) or isInEpoch(n, 2))
+            nodesInEpoch.forall(n => {
+                val nodeState = protocolState.get(n)
+                val props = nodeState.proposalArchive
+                props.exists(p => p.block == K and p.certificate.block == K and p.certificate.view == 5 and p.view == 6)
+            })
+        }
+        // add rest of the conditions (view v+2)
+    }
+)
 }
 
 module hotshotTimeout {

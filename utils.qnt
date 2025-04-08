@@ -14,7 +14,8 @@ module utils {
         }
     }
 
-    pure def listContains(l: List[Block], block: Block): bool = {
+    
+    pure def listContains2(l: List[Block], block: Block): bool = {
         l.foldl(false, (acc, b) => acc or (b == block))
     }
 
