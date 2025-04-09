@@ -16,11 +16,9 @@ module types {
     // Message Types
     type Vote = {sender: Node, which: VoteType, view: int, block: Block}             
     type Proposal = {sender: Node, which: ProposalType, view: int, block: Block, certificate: Certificate}
+    type Timeout = {sender: Node, view: int, latestCertificate: Certificate}
     
-    //type Message = 
-        //Vote({sender: Node, which: VoteType, view: int, block: Block})
-        //|Proposal({sender: Node, which: ProposalType, view: int, block: Block, certificate: Certificate})
-    //  Revise, this is only for protoyping
+
     type StakingTable = Set[int]
 
 
@@ -32,7 +30,9 @@ module types {
         lockedQC: Option[Certificate], // locked proposal
         decidedQC: Option[Certificate], // decided proposal
         decidedQCArchive: List[Certificate], // decided proposals
-        chain: List[Block], // chain of decided blocks
+        chain: List[Block], // chain of blocks
+        chain2: int -> List[Block],
+        highQCArchive : Block -> Certificate, // chain of decided blocks
         proposalArchive: Set[Proposal],
         voteArchive: Set[Vote],
         //may be needed to accumulate votes 
@@ -43,7 +43,4 @@ module types {
     }
     type ProtocolState = Node -> LocalState
 
-
-    // TODO: I think for modeling purposes, it might be better to have sepearate state for the network that contains the buffers
-    // type NetworkState = {
 }
