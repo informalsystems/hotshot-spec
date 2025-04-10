@@ -357,7 +357,7 @@ module HotShotEpochReconfig {
 
         
         if (isVoteValid(vote, node, state)){
-            val stateWithSig = accumulateSignatures(vote, node, state)
+            val stateWithSig = accumulateSignatures(vote, vote.sender, state)
 
             if (threshholdReached(vote, stateWithSig)){
                 // Form a certificate
@@ -570,7 +570,6 @@ module HotShotEpochReconfig {
     }
 
     action optimalStep = any {        
-        // Nondeterministically choose between normal message handling and view synchronization with a skew towards normal steps
             nondet n = oneOf(correct)
             val state = protocolState.get(n)
 
@@ -587,17 +586,37 @@ module HotShotEpochReconfig {
 
     // quint run hotshot.qnt --invariant=deadlock to try to find an interesting counterexample
 
-    // an invariant that is violated when there are pending messages in the system, meaning that the system is not making progress
+    // an invariant that is violated when there are no pending messages in the system, meaning that the system is not making progress
     // and is stuck in a deadlock
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
 
+    //If a node transitions to the next epoch (ie extended Quorum cert was formed) while other nodes are still in the current epoch,
+    // the nodes in the current epoch should have received the votes for extended QC.
+    // Apply this only on nodes that are part of e / e+1
+    val transition = not (
+        // some nodes are already in the next epoch
+        protocolState.values().exists(s => s.highQC != None and s.highQC.unwrap().block == K and s.highQC.unwrap().which == Extended)
+        and
+        // the nodes in the current epoch have not received the votes for extended QC
+
+        {
+        val nodes2 = protocolState.keys().filter(n => isInEpoch(n,2))
+        val states2 = nodes2.map(n => protocolState.get(n))
+        states2.exists(s => s.highQC != None and  
+                                    s.highQC.unwrap().block == K 
+                                    and s.highQC.unwrap().which == Quorum 
+                                    and s.votesBuffer.filter(v => v.block == K and v.which == Extended).size()==0
+                                    and s.propsBuffer.filter(p => p.certificate.block == K and p.certificate.which == Extended).size()==0)
+        }
+    ) 
+
     // an invariant that is violated when a transition into epoch 2 happens, ie block K+1 is locked
-    val optimalRun = not (protocolState.values().exists(s => s.lockedQC != None and s.lockedQC.unwrap().block == K + 1))
+    val optimalRun = not (protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1))
 
     // an invariant that is violated when a transition into epoch 2 happens, but a view sync was triggered during the epoch change
     val timeoutEpochRun = not (
         // we moved to the next epoch
-        protocolState.values().exists(s => s.highQC != None and s.highQC.unwrap().block == K + 1)
+        protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1)
         and
         // block K was proposed more than 3 times
         protocolState.values().exists(s => s.proposalArchive.filter(p => p.block == K).size() > 3)
