@@ -32,9 +32,12 @@ module HotShotEpochReconfig {
     val allFaultyVotes : Set[Vote] = Set()
     val allFaultyProposals : Set[Proposal] = Set()
 
+    // **State Variables**
+
+    // the state of the protocol (system) is represented as a map from node IDs to local states
     var protocolState: ProtocolState
 
-    //Maybe use this to store all the proposals seen
+    // A set to store all proposals, used to simulate fetchProposal from network
     var allProposals: Set[Proposal]
     
     
@@ -47,14 +50,16 @@ module HotShotEpochReconfig {
     
     // Return the leader for a given view and epoch
     pure def leader(view: int, epoch: int): int = {
+        // this should be consistent with the staking table or the system will halt.
         val epochIndex = (epoch - 1) % length(stakingTables)
         val viewIndex = view % size(stakingTables[epochIndex])
 
+        
         if (view == 3) 2
         else if (view == 4) 2
         else if (view == 7) 2
         else 1
-        //1
+        
     }
 
     
@@ -313,8 +318,8 @@ module HotShotEpochReconfig {
 
 
     // Update the node's Votes Map with the new vote
-    pure def accumulateSignatures(vote: Vote, node: Node, state: LocalState): LocalState = { 
-        val epochs = getEpochs(node, vote.block)
+    pure def accumulateSignatures(vote: Vote, state: LocalState): LocalState = { 
+        val epochs = getEpochs(vote.sender, vote.block)
 
         // For each relevant epoch, add the voter to the votes map
         val newVotes = epochs.fold(state.votesMap, (newVotesMap, e) => {
@@ -357,7 +362,7 @@ module HotShotEpochReconfig {
 
         
         if (isVoteValid(vote, node, state)){
-            val stateWithSig = accumulateSignatures(vote, vote.sender, state)
+            val stateWithSig = accumulateSignatures(vote, state)
 
             if (threshholdReached(vote, stateWithSig)){
                 // Form a certificate
@@ -428,7 +433,7 @@ module HotShotEpochReconfig {
         })
     }
 
-    action receiveMessages(node: Node, votes: Set[Vote], proposals: Set[Proposal]): bool = {
+    action deliverMessages(node: Node, votes: Set[Vote], proposals: Set[Proposal]): bool = {
       val allProps = accumulateProposals(protocolState, proposals)
 
       val pState = votes.fold(protocolState, (updatedState, vote) => {
@@ -526,7 +531,6 @@ module HotShotEpochReconfig {
         highQCArchive: Map(),
         lockedQC: None,
         decidedQC: None,
-        chain: List(),
         chain2: Map(),
         decidedQCArchive: List(),
         proposalArchive: Set(),
@@ -565,7 +569,7 @@ module HotShotEpochReconfig {
             val props = state.propsBuffer.union(allFaultyProposals)
             nondet propsToReceive = props.powerset().oneOf()
 
-            receiveMessages(n, votesToReceive, propsToReceive)
+            deliverMessages(n, votesToReceive, propsToReceive)
         }
     }
 
@@ -579,46 +583,73 @@ module HotShotEpochReconfig {
             val props = state.propsBuffer.union(allFaultyProposals)
             nondet propsToReceive = props.powerset().oneOf()
 
-            receiveMessages(n, votesToReceive, propsToReceive)     
+            deliverMessages(n, votesToReceive, propsToReceive)     
     } 
 
 
 
-    // quint run hotshot.qnt --invariant=deadlock to try to find an interesting counterexample
-
-    // an invariant that is violated when there are no pending messages in the system, meaning that the system is not making progress
-    // and is stuck in a deadlock
+    
+    /*
+    an invariant that is violated when there are no pending messages in the system, meaning that the system is not making progress
+    and is stuck in a deadlock.
+    This check is specific to our modelling of the protocol, and it relies on the fact that no timeouts/transmission mechanism was
+    included in the system. 
+    This property doesn't fully cover the liveness property, as it doesn't take into account the possibility of a livelock.
+    */
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
+    /*
+    After checking this invariant, we discovered that highQC which is used to check the validity of extended certificates 
+    (a check on 3 consecutive views with proposal.view - 1 = proposal.cert.view and proposal.cert.view - 1 = state.highQC). 
+    The problem here is that upon reaching the threshold for votes for the quorum proposal that precedes the extended proposal, 
+    the leader will form a quorum certificate and store it as highQC (function updateCerts is called in the main loop). 
+    This will cause the leader to reject it’s own proposal because the 3 consecutive views rule does not hold anymore 
+    (given that highQC was updated when forming the QC). 
+    As a consequence, a leader will not validate it’s own extended proposal and this creates a deadlock. 
+    This problem was not observed in the code.
+    */
 
-    //If a node transitions to the next epoch (ie extended Quorum cert was formed) while other nodes are still in the current epoch,
-    // the nodes in the current epoch should have received the votes for extended QC.
-    // Apply this only on nodes that are part of e / e+1
+
+
+    /*If a node transitions to the next epoch (ie extended Quorum cert was formed) while other nodes are still in the current epoch,
+     the nodes in the current epoch should have received the votes for extended QC.
+     Apply this only on nodes that are part of e / e+1
+    */
     val transition = not (
         // some nodes are already in the next epoch
         protocolState.values().exists(s => s.highQC != None and s.highQC.unwrap().block == K and s.highQC.unwrap().which == Extended)
         and
         // the nodes in the current epoch have not received the votes for extended QC
-
         {
         val nodes2 = protocolState.keys().filter(n => isInEpoch(n,2))
         val states2 = nodes2.map(n => protocolState.get(n))
         states2.exists(s => s.highQC != None and  
                                     s.highQC.unwrap().block == K 
                                     and s.highQC.unwrap().which == Quorum 
-                                    and s.votesBuffer.filter(v => v.block == K and v.which == Extended).size()==0
-                                    and s.propsBuffer.filter(p => p.certificate.block == K and p.certificate.which == Extended).size()==0)
+                                    and s.votesBuffer.filter(v => v.block == K and v.which == Extended).size()==0  
+                                    //some nodes might receive the proposal with the QC from the leader before receiving the votes
+                                    and s.propsBuffer.filter(p => p.certificate.block == K and p.certificate.which == Extended).size()==0) 
         }
-    ) 
+    )
+    /*
+    After checking this invariant, we found that step 6 of the specs text explicitly requires nodes to send V_{v+2}ˆextended votes 
+    to all nodes in epoch e+1. However, the pseudocode implementation only reflects votes being transmitted to the leader, 
+    as it can be seen in the sendVote(vote) function.
+    */
 
-    // an invariant that is violated when a transition into epoch 2 happens, ie block K+1 is locked
+
+    /* An invariant that is violated when a transition into epoch 2 happens, ie block K is decided
+    This was used to generate an optimal scenario
+    */
     val optimalRun = not (protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1))
 
-    // an invariant that is violated when a transition into epoch 2 happens, but a view sync was triggered during the epoch change
+    /* An invariant that is violated when a view sync occurs during the epoch change protocol. 
+    */
     val timeoutEpochRun = not (
         // we moved to the next epoch
         protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1)
         and
-        // block K was proposed more than 3 times
+        // block K was proposed more than 3 times, this comes from the fact that view change needs to restart if interrupted
+        // by a view sync, resulting in the block of height K being reproposed to build the 3 chain extended cert
         protocolState.values().exists(s => s.proposalArchive.filter(p => p.block == K).size() > 3)
         and
         // for all other blocks (1.to(K-1)) the block was proposed only once on all nodes to avoid viewSyncs before the epoch change
