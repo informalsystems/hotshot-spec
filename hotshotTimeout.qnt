@@ -51,15 +51,33 @@ module HotShotEpochReconfig {
     // Return the leader for a given view and epoch
     pure def leader(view: int, epoch: int): int = {
         // this should be consistent with the staking table or the system will halt.
-        val epochIndex = (epoch - 1) % length(stakingTables)
-        val viewIndex = view % size(stakingTables[epochIndex])
+        val leaders : List[List[Node]] =List(
+            List(1, 1, 2, 3, 4, 1, 2, 3, 4),
+            List(2, 6, 7, 1),
+            List(1, 2, 4, 5),
+            List(1, 5, 6, 8),
+            List(2, 3, 4, 5)
+        )
 
-        
-        if (view == 3) 2
-        else if (view == 4) 2
-        else if (view == 7) 2
+        val epochIndex = (epoch - 1) % length(leaders)
+        val viewIndex = view % length(leaders[epochIndex])
+        //q::debug("ldr",leaders[epochIndex][viewIndex])
+        /*
+        if (view == 0) 1
+        else if (view == 1) 1
+        else if (view == 2) 2
+        else if (view == 3) 3
+        else if (view == 4) 4
+        else if (view == 5) 2
+        else if (view == 6) 1
+        else if (view == 7) 4
+        else if (view == 8) 6
+        else if (view == 9) 2
+        else if (view == 10) 6
+        else if (view == 11) 7
         else 1
-        
+        */
+        leaders[epochIndex][viewIndex]
     }
 
     
@@ -89,6 +107,8 @@ module HotShotEpochReconfig {
         true
     }
 
+
+
     // Check if a received vote is valid for a given node
     pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
         val isLastBlock = (vote.block % K == 0)
@@ -97,12 +117,12 @@ module HotShotEpochReconfig {
 
         if (vote.view < state.view) false //Old vote
         else if (isLastBlock){ //Last block of the epoch
-            if (vote.which != Extended and not(isLeader(node, vote.view+1, vote.block))) false // Quorum votes are sent only to leaders(Only extended are broadcasted)
+            if (vote.which != Extended and not(isLeader(node, vote.view+1, vote.block))) false //look here-- seems weird to use // Quorum votes are sent only to leaders(Only extended are broadcasted)
             else if ((not (isInEpoch(node, epoch))) and (not (isInEpoch(node, epoch+1)))) false // If the not is not part of the epoch reconfig the vote is invalid
             else validSignature
         }
         else {
-            if (not(isLeader(node, vote.view+1, vote.block))) false  
+            if (not(isLeader(node, vote.view+1, vote.block))) false  //maybe +1 here ?
             else if (not (isInEpoch(node, epoch))) false
             else validSignature //TODO: The specs don't check if the vote here is for an extended proposal or not.
         }
@@ -370,10 +390,14 @@ module HotShotEpochReconfig {
                 val stateWithCerts = updateCerts(node ,stateWithSig, cert, allProps)
                 val newView = cert.view + 1
                 val newState = { ...stateWithCerts, view: newView }
-                if (isLeader(node,vote.view + 1, epoch)){
+                
+                // This is a trick to avoid duplicating the code from formProposal,
+                // We use the "potential" new proposal to check if we have passed to the next epoch or not 
+                val newProp = formProposal(node, cert, newState)
+                val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
+                
+                if (node == leader(newProp.view, newPropEpoch)){
                 // Form a proposal
-                    val newProp = formProposal(node, cert, newState)
-                    val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
                     // Update certificates based on the proposal's certificate
                     val receivers =
                         if (newProp.block % K == 0){
