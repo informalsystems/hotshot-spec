@@ -1,7 +1,7 @@
 // -*- mode: Bluespec; -*-
 module communication{
     import basicSpells.* from "spells/basicSpells"
-    import types.* from "./types"
+    import types.* from "./typeDef"
 
     //// ** MESSAGE PASSING FUNCTIONS **
     pure def broadcastProposal(state : ProtocolState, proposal: Proposal):ProtocolState = { //THIS PROBABLY WON'T BE USED

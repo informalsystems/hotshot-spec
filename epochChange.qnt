@@ -1,9 +1,9 @@
 // -*- mode: Bluespec; -*-
 module HotShotEpochReconfig {
-    import types.* from "./types"
-    import utils.* from "./utils"
+    import types.* from "./typeDef"
+    import utils.* from "./util"
 
-    import communication.* from "./communication"
+    import communication.* from "./comm"
 
     import basicSpells.* from "spells/basicSpells"
     import commonSpells.* from "spells/commonSpells"

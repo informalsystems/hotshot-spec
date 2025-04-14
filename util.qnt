@@ -1,8 +1,8 @@
 // -*- mode: Bluespec; -*-
 
 module utils {
-    import types.* from "./types"
-    import communication.* from "./communication"
+    import types.* from "./typeDef"
+    import communication.* from "./comm"
     import basicSpells.* from "spells/basicSpells"
     import rareSpells.* from "spells/rareSpells"
 
