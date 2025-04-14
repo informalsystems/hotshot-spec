@@ -86,15 +86,10 @@ module HotShotEpochReconfig {
         val isLastBlock = (block % K == 0)
         val epoch = if (isLastBlock) block / K else block / K + 1
         
-        if (isLastBlock){
-            if (isInEpoch(node, epoch) and isInEpoch(node, epoch+1)) Set(epoch,epoch+1)
-            else if (isInEpoch(node, epoch)) Set(epoch)
-            else if (isInEpoch(node, epoch+1)) Set(epoch+1)
-            else Set()
-        } else {
-            if (isInEpoch(node, epoch)) Set(epoch)
-            else Set()
-        }
+    if (isLastBlock) 
+        Set(epoch, epoch+1).filter(e => isInEpoch(node, e))
+    else 
+        Set(epoch).filter(e => isInEpoch(node, e))
     }
 
     // Check if a node is the leader for a given view and block
@@ -129,6 +124,7 @@ module HotShotEpochReconfig {
     }
 
 
+    // Abstraction tailored for simple simulations  
     pure def extends(a: Block, b: Block): bool = {
       a > b
     }
@@ -350,7 +346,7 @@ module HotShotEpochReconfig {
     }
 
     // Check if a quorum of votes has been reached for a proposal based on the accumulated votes
-    pure def threshholdReached(vote: Vote, state: LocalState): bool = {
+    pure def thresholdReached(vote: Vote, state: LocalState): bool = {
         val epochs = if (vote.block % K == 0) Set(vote.block / K, vote.block / K + 1) else Set(vote.block / K + 1)
         
         // For each relevant epoch, check if we have enough votes
@@ -384,7 +380,7 @@ module HotShotEpochReconfig {
         if (isVoteValid(vote, node, state)){
             val stateWithSig = accumulateSignatures(vote, state)
 
-            if (threshholdReached(vote, stateWithSig)){
+            if (thresholdReached(vote, stateWithSig)){
                 // Form a certificate
                 val cert = certificate(node, vote.which, vote.view, vote.block, stateWithSig)
                 val stateWithCerts = updateCerts(node ,stateWithSig, cert, allProps)
@@ -474,7 +470,7 @@ module HotShotEpochReconfig {
       }
     }
     
-    // New action to simulate viewSync propotocol by synchronizing all correct nodes to the highest view
+    // This action abstracts away viewSync and brings all correct nodes to the highest view  
     action viewSync: bool = {
         
         // find the highest view among all correct nodes
@@ -506,7 +502,7 @@ module HotShotEpochReconfig {
         val newLeader = leader(highestView + 1, epoch)
         // update the view of the new leader
         val newLeaderState = {...updatedState.get(newLeader), view: highestView + 1}
-        val updatedState2 = updatedState.setBy(newLeader, state => {...updatedState.get(newLeader), view: highestView + 1})
+        val updatedState2 = updatedState.setBy(newLeader, state => newLeaderState)
         
         // form a new proposal
         val newProp0 = formProposal(newLeader, highestQC, newLeaderState)
@@ -581,23 +577,15 @@ module HotShotEpochReconfig {
         val odds = 1.to(100)
         nondet timeout = oneOf(odds)
 
-        if (timeout == 50){
+        // The view sync occurs with a probabiliy of 1%
+        if (timeout == 1){
             viewSync
         } else {   
-            nondet n = oneOf(correct)
-            val state = protocolState.get(n)
-
-            val votes = state.votesBuffer.union(allFaultyVotes)
-            nondet votesToReceive = votes.powerset().oneOf()
-
-            val props = state.propsBuffer.union(allFaultyProposals)
-            nondet propsToReceive = props.powerset().oneOf()
-
-            deliverMessages(n, votesToReceive, propsToReceive)
+            stepWithoutTimeout
         }
     }
 
-    action optimalStep = any {        
+    action stepWithoutTimeout = any {        
             nondet n = oneOf(correct)
             val state = protocolState.get(n)
 
@@ -673,9 +661,6 @@ module HotShotEpochReconfig {
         protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1)
         and
         // block K was proposed more than 3 times, this comes from the fact that view change needs to restart if interrupted
-        // by a view sync, resulting in the block of height K being reproposed to build the 3 chain extended cert
-        protocolState.values().exists(s => s.proposalArchive.filter(p => p.block == K).size() > 3)
-        and
         // for all other blocks (1.to(K-1)) the block was proposed only once on all nodes to avoid viewSyncs before the epoch change
         // this can be eliminated because the simulations tend to find a case that fits this naturally
         1.to(K-1).forall(b => {
