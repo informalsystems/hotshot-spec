@@ -21,6 +21,7 @@ module HotShotEpochReconfig {
     pure val allNodes = 1.to(MAX_NODES)
     pure val correct: Set[Node] = allNodes.exclude(FAULTY)
 
+    // Here each list entry corresponds to one epoch
     pure val stakingTables: List[StakingTable]=List(
         Set(1, 2, 3, 4),
         Set(1, 2, 6, 7),
@@ -41,15 +42,16 @@ module HotShotEpochReconfig {
     var allProposals: Set[Proposal]
     
     
-    // Check if a node is part of the staking table for a given epoch
+    /// Check if a node is part of the staking table for a given epoch
     pure def isInEpoch(node: Node, epoch: int): bool = {
         val epochIndex = (epoch - 1) % length(stakingTables)
         if (epoch <= 0) false
         else stakingTables[epochIndex].contains(node)
     }
     
-    // Return the leader for a given view and epoch
+    /// Return the leader for a given view and epoch
     pure def leader(view: int, epoch: int): int = {
+        // This currently does not correspond to the implementation but just returns data that is useful enough for simulation
         // this should be consistent with the staking table or the system will halt.
         val leaders : List[List[Node]] =List(
             List(1, 1, 2, 3, 4, 1, 2, 3, 4),
@@ -61,94 +63,84 @@ module HotShotEpochReconfig {
 
         val epochIndex = (epoch - 1) % length(leaders)
         val viewIndex = view % length(leaders[epochIndex])
-        //q::debug("ldr",leaders[epochIndex][viewIndex])
-        /*
-        if (view == 0) 1
-        else if (view == 1) 1
-        else if (view == 2) 2
-        else if (view == 3) 3
-        else if (view == 4) 4
-        else if (view == 5) 2
-        else if (view == 6) 1
-        else if (view == 7) 4
-        else if (view == 8) 6
-        else if (view == 9) 2
-        else if (view == 10) 6
-        else if (view == 11) 7
-        else 1
-        */
         leaders[epochIndex][viewIndex]
     }
 
+    /// Check if a block is the last block of the epoch
+    pure def isLastBlockofEpoch(block: int) : bool = {
+        block % K == 0
+    }
+
+    /// Return the epoch for a given block height
+    pure def blockEpoch(block: int): int = {
+        if (isLastBlockofEpoch(block)) block / K else block / K + 1
+    }
+
     
-    // Return the epochs for which a node is active (only the current epoch or the current and next epoch)
+    /// Return the epochs for which a node is active (only the current epoch or the current and next epoch)
     pure def getEpochs(node: Node, block: Block): Set[int] = {
-        val isLastBlock = (block % K == 0)
-        val epoch = if (isLastBlock) block / K else block / K + 1
+        val epoch = blockEpoch(block)
         
-    if (isLastBlock) 
+    if (isLastBlockofEpoch(block)) //last block of the epoch
         Set(epoch, epoch+1).filter(e => isInEpoch(node, e))
     else 
         Set(epoch).filter(e => isInEpoch(node, e))
     }
 
-    // Check if a node is the leader for a given view and block
+    /// Check if a node is the leader for a given view and block
     pure def isLeader(node: Node, view: int, block: int): bool = {
-        val epoch = if (block % K == 0) block / K else block / K + 1
-        node == leader(view, epoch)
+        node == leader(view, blockEpoch(block))
     }
 
+    /// Abstraction of signature validation
     pure def isSignatureValid: bool = {
         true
     }
 
 
 
-    // Check if a received vote is valid for a given node
+    /// Check if a received vote is valid for a given node
     pure def isVoteValid(vote: Vote, node: Node, state: LocalState): bool = {
-        val isLastBlock = (vote.block % K == 0)
-        val epoch = if (isLastBlock) vote.block / K else vote.block / K + 1
+        val epoch = blockEpoch(vote.block)
         val validSignature = isSignatureValid
 
         if (vote.view < state.view) false //Old vote
-        else if (isLastBlock){ //Last block of the epoch
-            if (vote.which != Extended and not(isLeader(node, vote.view+1, vote.block))) false //look here-- seems weird to use // Quorum votes are sent only to leaders(Only extended are broadcasted)
+        else if (isLastBlockofEpoch(vote.block)){ //Last block of the epoch
+            if (vote.which != Extended and not(isLeader(node, vote.view+1, vote.block))) false // Quorum votes are sent only to leaders(Only extended are broadcasted)
             else if ((not (isInEpoch(node, epoch))) and (not (isInEpoch(node, epoch+1)))) false // If the not is not part of the epoch reconfig the vote is invalid
             else validSignature
         }
         else {
-            if (not(isLeader(node, vote.view+1, vote.block))) false  //maybe +1 here ?
+            if (not(isLeader(node, vote.view+1, vote.block))) false  
             else if (not (isInEpoch(node, epoch))) false
-            else validSignature //TODO: The specs don't check if the vote here is for an extended proposal or not.
+            else validSignature
         }
     }
 
 
-    // Abstraction tailored for simple simulations  
+    /// Abstraction tailored for simple simulations  
     pure def extends(a: Block, b: Block): bool = {
       a > b
     }
 
-    // Return a proposal record
+    /// Return a proposal record
     pure def proposal(node: Node, block: Block, view: int, which: ProposalType, cert: Certificate): Proposal = {
         {sender: node, which: which, view: view, block: block, certificate: cert}
     }
 
-    // Return a vote record
+    /// Return a vote record
     pure def vote(node: Node, block: Block, view: int, which: VoteType): Vote = {
         {sender: node, which: which, view: view, block: block}
     }
 
-    // Return a certificate record for a given block, 
-    // includes optional extra signers for the next epoch if the block is the last of the current epoch
+    /// Return a certificate record for a given block, includes optional extra signers for the next epoch if the block is the last of the current epoch
     pure def certificate(node: Node, which: CertificateType, view: int, block: Block, state: LocalState): Certificate = {
-        val lastBlock = (block % K == 0)
-        val epoch = if (lastBlock) block / K  else block / K + 1
+        val epoch = blockEpoch(block)
 
         val signers = state.votesMap.getOrElse((which, block, view, epoch), Set())
         val basicCert = {which: which, signers: signers, nextEpochSigners: Set(),view: view, block: block}
 
-        if (lastBlock){
+        if (isLastBlockofEpoch(block)) { // Last block of the epoch
             val nextSigners = state.votesMap.getOrElse((which, block, view, epoch + 1), Set())
             {...basicCert, nextEpochSigners: nextSigners}
         } else {
@@ -157,7 +149,7 @@ module HotShotEpochReconfig {
     }
 
 
-    // Form a proposal based on the certificate.
+    /// Form a proposal based on a certificate.
     pure def formProposal(node: Node, cert: Certificate, state: LocalState): Proposal = {
         
         if (cert.block % K == 0 and cert.block > 0)  { // Last block of the epoch
@@ -195,7 +187,7 @@ module HotShotEpochReconfig {
         }
     }
 
-    // Check if the proposal respects the safety and liveness properties
+    /// Check if the proposal respects the safety and liveness properties
     pure def isProposalSafe(proposal: Proposal, state:LocalState): bool = {
         val lockedQC = state.lockedQC
         val block = proposal.block
@@ -211,22 +203,21 @@ module HotShotEpochReconfig {
         }
     }
 
-    // Check if the certificate included in the proposal is valid
+    /// Check if the certificate included in the proposal is valid
     pure def isCertValid(proposal: Proposal, state: LocalState): bool =
         val cert = proposal.certificate
         val block = proposal.block
-        val epoch = if (block % K == 0) block / K else block / K + 1
+        val epoch = blockEpoch(block)
         val isFirstBlock = (block % K == 1)
-        val isLastBlock = (block % K == 0)
         
-        if (isLastBlock){   // Last block of the epoch
+        if (isLastBlockofEpoch(block)){   // Last block of the epoch
             if (cert.which == Extended) false
             // Check if the proposal with the repeated block (ie part of epoch change) has enough signatures for the current and next epoch
             else if (block == cert.block) and{ size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q , size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch+1))) >= Q} 
             else and {isProposalSafe(proposal,state) , size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q}
         }
 
-        else if (isFirstBlock and block !=1 ){ // First block of the epoch and not the genesis block
+        else if (isFirstBlock and block !=1 ){ // First block of the epoch and not the genesis block, special treatment for the first block to ensure the system starts progressing
             if (cert.which != Extended) false
             else if (not(isProposalSafe(proposal, state))) false
             else and {size(cert.signers) >= Q , (size(cert.nextEpochSigners) >= Q)}
@@ -261,7 +252,7 @@ module HotShotEpochReconfig {
         }
     }
 
-    // Check if the proposal is valid
+    /// Check if the proposal is valid
     pure def isProposalValid(state: LocalState, proposal: Proposal, node: Node): bool = {
         if (proposal.view < state.view) false
         else if (not(isSignatureValid)) false //Dummy signature check
@@ -272,7 +263,7 @@ module HotShotEpochReconfig {
     }
 
     
-    // utility function to update the stored chain
+    /// Utility function to update the stored chain
     pure def updateChain(node: Node,oldChain: int -> List[Block], newBlocks: List[Certificate]): int -> List[Block] = {
         val chainMap = newBlocks.foldl(oldChain, (cm, c) => {
             val epoch = c.block / K + 1
@@ -284,6 +275,8 @@ module HotShotEpochReconfig {
         chainMap.mapRemoveAll(goodEpochs)
     }
 
+    /// Update the stored quorum certificates (high-locked-decided) in the local state based on the last observed
+    /// valid certificate and commit the decided blocks to the chain. 
     pure def updateCerts(node: Node, oldState: LocalState, cert: Certificate, allProps: Set[Proposal]): LocalState = {
         val highQC = cert
         val state = { ...oldState, highQC: Some(highQC), highQCArchive: updateHighQCMap(highQC, oldState.highQCArchive) }
@@ -333,7 +326,7 @@ module HotShotEpochReconfig {
     }
 
 
-    // Update the node's Votes Map with the new vote
+    /// Update the node's Votes Map with the new vote
     pure def accumulateSignatures(vote: Vote, state: LocalState): LocalState = { 
         val epochs = getEpochs(vote.sender, vote.block)
 
@@ -345,7 +338,7 @@ module HotShotEpochReconfig {
         { ...state, votesMap: newVotes }
     }
 
-    // Check if a quorum of votes has been reached for a proposal based on the accumulated votes
+    /// Check if a quorum of votes has been reached for a proposal based on the accumulated votes
     pure def thresholdReached(vote: Vote, state: LocalState): bool = {
         val epochs = if (vote.block % K == 0) Set(vote.block / K, vote.block / K + 1) else Set(vote.block / K + 1)
         
@@ -357,7 +350,7 @@ module HotShotEpochReconfig {
             })
     }
 
-    // Send a proposal to the leader (either the current leader or the next epoch leader)
+    /// Send a proposal to the leader (either the current leader or the next epoch leader)
     pure def sendVoteToLeader(state: ProtocolState, v: Node, vote: Vote): ProtocolState = {
         pure val epoch = if (vote.block % K == 0) vote.block / K else vote.block / K + 1
         pure val localState = state.get(v)
@@ -370,10 +363,11 @@ module HotShotEpochReconfig {
         sendVote(state, leaderToSend, vote)
     }
 
+    /// Handle a vote message by updating the local state of the node and possibly sending a proposal.
     pure def handleVote(vote: Vote, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
         val oldState = pState.get(node)
         val state = { ...oldState, votesBuffer: oldState.votesBuffer.exclude(Set(vote)), voteArchive: oldState.voteArchive.union(Set(vote))}
-        val epoch = if (vote.block % K == 0) vote.block / K else vote.block / K + 1
+        val epoch = blockEpoch(vote.block)
         val nodes = pState.keys()
 
         
@@ -390,13 +384,13 @@ module HotShotEpochReconfig {
                 // This is a trick to avoid duplicating the code from formProposal,
                 // We use the "potential" new proposal to check if we have passed to the next epoch or not 
                 val newProp = formProposal(node, cert, newState)
-                val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
-                
+                val newPropEpoch = blockEpoch(newProp.block)
+
                 if (node == leader(newProp.view, newPropEpoch)){
-                // Form a proposal
                     // Update certificates based on the proposal's certificate
                     val receivers =
-                        if (newProp.block % K == 0){
+                        if (isLastBlockofEpoch(newProp.block)) {
+                            // If the proposal is the last block of the epoch, send to all nodes in the current and next epoch
                             nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
                         } else {
                             nodes.filter(n => isInEpoch(n, newPropEpoch))
@@ -415,6 +409,7 @@ module HotShotEpochReconfig {
         }
     }
 
+    /// Handle a proposal message by updating the local state of the node and possibly sending a vote.
     pure def handleProposal(prop: Proposal, pState: ProtocolState, node: Node, allProps: Set[Proposal]): ProtocolState = {
         val oldState = pState.get(node)
         val state = { ...oldState, propsBuffer: oldState.propsBuffer.exclude(Set(prop)), proposalArchive: oldState.proposalArchive.union(Set(prop))}
@@ -439,13 +434,14 @@ module HotShotEpochReconfig {
         }
     }
 
+    /// Utility function to accumulate all proposals from the protocol state. Used to simulate fetchProposal from network.
     pure def accumulateProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
         pState.values().fold(allProps, (props, state) => {
             props.union(state.propsBuffer).union(state.proposalArchive)
         })
     }
 
-    // Get the highest view number among all correct nodes
+    /// Get the highest view number among all correct nodes
     pure def getHighestView(pState: ProtocolState): int = {
         correct.fold(0, (maxView, node) => {
             val nodeView = pState.get(node).view
@@ -453,6 +449,7 @@ module HotShotEpochReconfig {
         })
     }
 
+    /// Non deterministic action to simulate message delivery via network under the assumption of partial synchrony.
     action deliverMessages(node: Node, votes: Set[Vote], proposals: Set[Proposal]): bool = {
       val allProps = accumulateProposals(protocolState, proposals)
 
@@ -470,7 +467,7 @@ module HotShotEpochReconfig {
       }
     }
     
-    // This action abstracts away viewSync and brings all correct nodes to the highest view  
+    /// This action abstracts away viewSync and brings all correct nodes to the highest view  
     action viewSync: bool = {
         
         // find the highest view among all correct nodes
@@ -496,7 +493,7 @@ module HotShotEpochReconfig {
         })
 
         val lastCertifiedBlock = highestQC.block
-        val epoch = if (lastCertifiedBlock % K == 0) lastCertifiedBlock / K else lastCertifiedBlock / K + 1
+        val epoch = blockEpoch(lastCertifiedBlock)
         
         // leader of the next view proceeds to propose a new block
         val newLeader = leader(highestView + 1, epoch)
@@ -513,9 +510,9 @@ module HotShotEpochReconfig {
             newProp0
         }
         
-        val newPropEpoch = if (newProp.block % K == 0) newProp.block / K else newProp.block / K + 1
+        val newPropEpoch = blockEpoch(newProp.block)
         val receivers =
-            if (newProp.block % K == 0){
+            if (isLastBlockofEpoch(newProp.block)) {
                 nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
             } else {
                 nodes.filter(n => isInEpoch(n, newPropEpoch))
@@ -564,14 +561,12 @@ module HotShotEpochReconfig {
 
 
 
-    /*
-    Execution Loop
-    The execution step (step) randomly picks a validator and either:
-        Handles a received message 
-        Delivers a pending message (deliver).
-        Triggers a timeout (viewSync).
-    */
-    action step = any {
+   
+    /// Execution Loop
+    /// The execution step (step) randomly picks a validator and either:
+    /// Delivers a pending message (deliver).
+    /// Triggers a (viewSync).
+    action step = {
         // Nondeterministically choose between normal message handling and view synchronization with a skew towards normal steps so the system is more likely to
         // make progress
         val odds = 1.to(100)
@@ -585,15 +580,16 @@ module HotShotEpochReconfig {
         }
     }
 
-    action stepWithoutTimeout = any {        
+    /// Execution step without viewSync
+    action stepWithoutTimeout = {        
             nondet n = oneOf(correct)
             val state = protocolState.get(n)
 
             val votes = state.votesBuffer.union(allFaultyVotes)
-            nondet votesToReceive = votes.powerset().oneOf()
+            nondet votesToReceive = votes.powerset().exclude(Set(Set())).oneOf()
 
             val props = state.propsBuffer.union(allFaultyProposals)
-            nondet propsToReceive = props.powerset().oneOf()
+            nondet propsToReceive = props.powerset().exclude(Set(Set())).oneOf()
 
             deliverMessages(n, votesToReceive, propsToReceive)     
     } 
@@ -601,13 +597,13 @@ module HotShotEpochReconfig {
 
 
     
-    /*
-    an invariant that is violated when there are no pending messages in the system, meaning that the system is not making progress
-    and is stuck in a deadlock.
-    This check is specific to our modelling of the protocol, and it relies on the fact that no timeouts/transmission mechanism was
-    included in the system. 
-    This property doesn't fully cover the liveness property, as it doesn't take into account the possibility of a livelock.
-    */
+    
+    /// A witness that is violated when there are no pending messages in the system, meaning that the system is not making progress
+    /// and is stuck in a deadlock.
+    /// This check is specific to our modelling of the protocol, and it relies on the fact that no timeouts/transmission mechanism was
+    /// included in the system. 
+    /// This property doesn't fully cover the liveness property, as it doesn't take into account the possibility of a livelock.
+    
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
     /*
     After checking this invariant, we discovered that highQC which is used to check the validity of extended certificates 
@@ -622,10 +618,9 @@ module HotShotEpochReconfig {
 
 
 
-    /*If a node transitions to the next epoch (ie extended Quorum cert was formed) while other nodes are still in the current epoch,
-     the nodes in the current epoch should have received the votes for extended QC.
-     Apply this only on nodes that are part of e / e+1
-    */
+    /// If a node transitions to the next epoch (ie extended Quorum cert was formed) while other nodes are still in the current epoch,
+    /// the nodes in the current epoch should have received the votes for extended QC.
+    /// Apply this only on nodes that are part of e / e+1
     val transition = not (
         // some nodes are already in the next epoch
         protocolState.values().exists(s => s.highQC != None and s.highQC.unwrap().block == K and s.highQC.unwrap().which == Extended)
@@ -649,18 +644,24 @@ module HotShotEpochReconfig {
     */
 
 
-    /* An invariant that is violated when a transition into epoch 2 happens, ie block K is decided
-    This was used to generate an optimal scenario
-    */
+    /// A witness to generate a run where a transition into epoch 2 occured. It can be used
+    /// to let the simulator generate an optimal scenario (as described in the English spec)
+    /// using the stepWithoutTimeout action
     val optimalRun = not (protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1))
 
-    /* An invariant that is violated when a view sync occurs during the epoch change protocol. 
-    */
+    /// A witness that allows us to let the simulator find runs where a timeout occurs in the epoch change
+    /// using the standard step action. As the optimal runs needs 3 proposals, we look for a state with 
+    /// 4 proposals.
     val timeoutEpochRun = not (
         // we moved to the next epoch
+        // At least one node has a decided QC for the first block of the next epoch
         protocolState.values().exists(s => s.decidedQC != None and s.decidedQC.unwrap().block == K + 1)
         and
         // block K was proposed more than 3 times, this comes from the fact that view change needs to restart if interrupted
+        // by a view sync, resulting in the block of height K being reproposed to build the 3 chain extended cert
+        protocolState.values().exists(s => s.proposalArchive.filter(p => p.block == K).size() > 3)
+
+        and
         // for all other blocks (1.to(K-1)) the block was proposed only once on all nodes to avoid viewSyncs before the epoch change
         // this can be eliminated because the simulations tend to find a case that fits this naturally
         1.to(K-1).forall(b => {
