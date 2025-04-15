@@ -15,31 +15,73 @@ module HotShotEpochReconfig {
     const Q: int         // quorum size (2F+1 signatures needed for decisions)
     const K: int         // epoch duration
     const MAX_NODES: int // size of the universe of node IDs (>= N, to allow new nodes joining)
-    const FAULTY: Set[Node]
+    const FAULTY: Set[Node] // set of faulty nodes (size <= F)
+    // list of validators for each epoch, each entry is a list of node IDs. 
+    // the Node at index (j,i) is the leader of view i in epoch j (modulo the length of the list[j]).
+    // The first 2 views should be led by the node 1 to be compatible with our current initialization.
+    const VALIDATORS: List[List[Node]]
 
-    //  Revise, this is only for protoyping
+
     pure val allNodes = 1.to(MAX_NODES)
     pure val correct: Set[Node] = allNodes.exclude(FAULTY)
 
-    // Here each list entry corresponds to one epoch
-    pure val stakingTables: List[StakingTable]=List(
-        Set(1, 2, 3, 4),
-        Set(1, 2, 6, 7),
-        Set(1, 2, 4, 5),
-        Set(1, 5, 6, 8),
-        Set(2, 3, 4, 5),
-    )
+    // This val is a set representation of the validators for each epoch.
+    pure val stakingTables: List[StakingTable]= VALIDATORS.foldl(List(), (acc, l) => {
+        val activeValidators = l.toSet()
+        acc.append(activeValidators)
+    })
         
     val allFaultyVotes : Set[Vote] = Set()
     val allFaultyProposals : Set[Proposal] = Set()
+    
+    // **Initial State Vals**
+    val genesisCert = {
+            cType: Quorum, 
+            signers: Set(1, 2, 4), 
+            nextEpochSigners: Set(),
+            view: 0, 
+            block: 0
+        }
+
+    val genesisProp = {
+            sender: 1, 
+            pType: Quorum, 
+            view: 1, 
+            block: 1, 
+            certificate: genesisCert
+        }
 
     // **State Variables**
 
-    // the state of the protocol (system) is represented as a map from node IDs to local states
+    // the state of the protocol is represented as a map from node IDs to local states
     var protocolState: ProtocolState
 
     // A set to store all proposals, used to simulate fetchProposal from network
     var allProposals: Set[Proposal]
+
+
+    // **Functions**
+
+    /// Initialize the state of the system
+    pure def initState: (ProtocolState, Set[Proposal]) = {
+
+        val pState = 1.to(MAX_NODES).mapBy(node => {
+            view: 0,
+            highQC: None,
+            highQCArchive: Map(),
+            lockedQC: None,
+            decidedQC: None,
+            chain: Map(),
+            decidedQCArchive: List(),
+            proposalArchive: Set(),
+            voteArchive: Set(),
+            votesMap: Map(),
+            votesBuffer: Set(),
+            propsBuffer: Set(genesisProp),
+        })
+        val allProps = Set(genesisProp)
+        (pState, allProps)
+    }
     
     
     /// Check if a node is part of the staking table for a given epoch
@@ -51,16 +93,7 @@ module HotShotEpochReconfig {
     
     /// Return the leader for a given view and epoch
     pure def leader(view: int, epoch: int): int = {
-        // This currently does not correspond to the implementation but just returns data that is useful enough for simulation
-        // this should be consistent with the staking table or the system will halt.
-        val leaders : List[List[Node]] =List(
-            List(1, 1, 2, 3, 4, 1, 2, 3, 4),
-            List(2, 6, 7, 1),
-            List(1, 2, 4, 5),
-            List(1, 5, 6, 8),
-            List(2, 3, 4, 5)
-        )
-
+        val leaders = VALIDATORS
         val epochIndex = (epoch - 1) % length(leaders)
         val viewIndex = view % length(leaders[epochIndex])
         leaders[epochIndex][viewIndex]
@@ -106,7 +139,7 @@ module HotShotEpochReconfig {
 
         if (vote.view < state.view) false //Old vote
         else if (isLastBlockofEpoch(vote.block)){ //Last block of the epoch
-            if (vote.which != Extended and not(isLeader(node, vote.view+1, vote.block))) false // Quorum votes are sent only to leaders(Only extended are broadcasted)
+            if (vote.vType != Extended and not(isLeader(node, vote.view+1, vote.block))) false // Quorum votes are sent only to leaders(Only extended are broadcasted)
             else if ((not (isInEpoch(node, epoch))) and (not (isInEpoch(node, epoch+1)))) false // If the not is not part of the epoch reconfig the vote is invalid
             else validSignature
         }
@@ -124,24 +157,24 @@ module HotShotEpochReconfig {
     }
 
     /// Return a proposal record
-    pure def proposal(node: Node, block: Block, view: int, which: ProposalType, cert: Certificate): Proposal = {
-        {sender: node, which: which, view: view, block: block, certificate: cert}
+    pure def proposal(node: Node, block: Block, view: int, pType: ProposalType, cert: Certificate): Proposal = {
+        {sender: node, pType: pType, view: view, block: block, certificate: cert}
     }
 
     /// Return a vote record
-    pure def vote(node: Node, block: Block, view: int, which: VoteType): Vote = {
-        {sender: node, which: which, view: view, block: block}
+    pure def vote(node: Node, block: Block, view: int, vType: VoteType): Vote = {
+        {sender: node, vType: vType, view: view, block: block}
     }
 
     /// Return a certificate record for a given block, includes optional extra signers for the next epoch if the block is the last of the current epoch
-    pure def certificate(node: Node, which: CertificateType, view: int, block: Block, state: LocalState): Certificate = {
+    pure def certificate(node: Node, cType: CertificateType, view: int, block: Block, state: LocalState): Certificate = {
         val epoch = blockEpoch(block)
 
-        val signers = state.votesMap.getOrElse((which, block, view, epoch), Set())
-        val basicCert = {which: which, signers: signers, nextEpochSigners: Set(),view: view, block: block}
+        val signers = state.votesMap.getOrElse((cType, block, view, epoch), Set())
+        val basicCert = {cType: cType, signers: signers, nextEpochSigners: Set(),view: view, block: block}
 
         if (isLastBlockofEpoch(block)) { // Last block of the epoch
-            val nextSigners = state.votesMap.getOrElse((which, block, view, epoch + 1), Set())
+            val nextSigners = state.votesMap.getOrElse((cType, block, view, epoch + 1), Set())
             {...basicCert, nextEpochSigners: nextSigners}
         } else {
             basicCert
@@ -154,7 +187,7 @@ module HotShotEpochReconfig {
         
         if (cert.block % K == 0 and cert.block > 0)  { // Last block of the epoch
 
-            if (cert.which == Extended) { // Extended proposal confirmed, propose the first block of the next epoch
+            if (cert.cType == Extended) { // Extended proposal confirmed, propose the first block of the next epoch
                 val newBlock = cert.block + 1
                proposal(node, newBlock, state.view, Quorum, cert)
             }
@@ -211,20 +244,20 @@ module HotShotEpochReconfig {
         val isFirstBlock = (block % K == 1)
         
         if (isLastBlockofEpoch(block)){   // Last block of the epoch
-            if (cert.which == Extended) false
+            if (cert.cType == Extended) false
             // Check if the proposal with the repeated block (ie part of epoch change) has enough signatures for the current and next epoch
             else if (block == cert.block) and{ size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q , size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch+1))) >= Q} 
             else and {isProposalSafe(proposal,state) , size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q}
         }
 
         else if (isFirstBlock and block !=1 ){ // First block of the epoch and not the genesis block, special treatment for the first block to ensure the system starts progressing
-            if (cert.which != Extended) false
+            if (cert.cType != Extended) false
             else if (not(isProposalSafe(proposal, state))) false
             else and {size(cert.signers) >= Q , (size(cert.nextEpochSigners) >= Q)}
         }
 
         else { // Not first or last block of the epoch
-            if (cert.which == Extended) false
+            if (cert.cType == Extended) false
             else if (not(isProposalSafe(proposal, state))) false
             else if (not(size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) false
             else true
@@ -257,7 +290,7 @@ module HotShotEpochReconfig {
         if (proposal.view < state.view) false
         else if (not(isSignatureValid)) false //Dummy signature check
         else if (not(isLeader(proposal.sender, proposal.view, proposal.block))) false
-        else if (((proposal.which == Extended)) and (not(isExtendedProposalValid(proposal, state, node)))) false
+        else if (((proposal.pType == Extended)) and (not(isExtendedProposalValid(proposal, state, node)))) false
         else if (not (isCertValid(proposal, state))) false
         else true
     }
@@ -303,8 +336,8 @@ module HotShotEpochReconfig {
                             val nodeInEpoch = isInEpoch(node, epoch)
                             val newBlocks = commitedBlocks(justify2HighQC, decidedQC, state.highQCArchive)
                             val newHighQCArchive = mapRemoveAll(state.highQCArchive, toSet(newBlocks).map(c => c.block))
-                            val chainMap = updateChain(node, state.chain2, newBlocks)
-                            { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC) , highQCArchive:newHighQCArchive, chain2: chainMap}
+                            val chainMap = updateChain(node, state.chain, newBlocks)
+                            { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC), decidedQC: Some(justify2HighQC) , highQCArchive:newHighQCArchive, chain: chainMap}
                         } else if (updateLockedQC){
                             { ...state, highQC: Some(highQC), lockedQC: Some(justifyHighQC)}
                         } else if (updateDecidedQC){  
@@ -313,8 +346,8 @@ module HotShotEpochReconfig {
                             
                             val newBlocks = commitedBlocks(justify2HighQC, decidedQC, state.highQCArchive)
                             val newHighQCArchive = mapRemoveAll(state.highQCArchive, toSet(newBlocks).map(c => c.block))
-                            val chainMap = updateChain(node, state.chain2, newBlocks)
-                            { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC), highQCArchive:newHighQCArchive, chain2: chainMap}
+                            val chainMap = updateChain(node, state.chain, newBlocks)
+                            { ...state, highQC: Some(highQC), decidedQC: Some(justify2HighQC), highQCArchive:newHighQCArchive, chain: chainMap}
                         } else {
                             { ...state, highQC: Some(highQC)} 
                     } 
@@ -332,7 +365,7 @@ module HotShotEpochReconfig {
 
         // For each relevant epoch, add the voter to the votes map
         val newVotes = epochs.fold(state.votesMap, (newVotesMap, e) => {
-            val key = (vote.which, vote.block, vote.view, e)
+            val key = (vote.vType, vote.block, vote.view, e)
             newVotesMap.setByWithDefault(key, voters => voters.union(Set(vote.sender)).filter(s => isInEpoch(s,e)), Set())
         })
         { ...state, votesMap: newVotes }
@@ -344,7 +377,7 @@ module HotShotEpochReconfig {
         
         // For each relevant epoch, check if we have enough votes
         epochs.forall(e => {
-                val key = (vote.which, vote.block, vote.view, e)
+                val key = (vote.vType, vote.block, vote.view, e)
                 val voters = state.votesMap.getOrElse(key, Set())
                 voters.size() >= Q
             })
@@ -355,7 +388,7 @@ module HotShotEpochReconfig {
         pure val epoch = if (vote.block % K == 0) vote.block / K else vote.block / K + 1
         pure val localState = state.get(v)
 
-        pure val leaderToSend = if (vote.which == Extended) {
+        pure val leaderToSend = if (vote.vType == Extended) {
           leader(localState.view + 1, epoch + 1)
         } else {
           leader(localState.view + 1, epoch)
@@ -376,7 +409,7 @@ module HotShotEpochReconfig {
 
             if (thresholdReached(vote, stateWithSig)){
                 // Form a certificate
-                val cert = certificate(node, vote.which, vote.view, vote.block, stateWithSig)
+                val cert = certificate(node, vote.vType, vote.view, vote.block, stateWithSig)
                 val stateWithCerts = updateCerts(node ,stateWithSig, cert, allProps)
                 val newView = cert.view + 1
                 val newState = { ...stateWithCerts, view: newView }
@@ -419,10 +452,10 @@ module HotShotEpochReconfig {
             val stateWithcerts = updateCerts(node, state, prop.certificate, allProps)
             val newView = prop.view
             val newState = { ...stateWithcerts, view: newView}
-            val newVote = vote(node, prop.block, prop.view, prop.which)
+            val newVote = vote(node, prop.block, prop.view, prop.pType)
             val newPstate = pState.setBy(node, state => newState)
 
-            if (prop.which == Extended){ //if the prop is an extended vote
+            if (prop.pType == Extended){ //if the prop is an extended vote
                 val receivers = nodes.filter(n => isInEpoch(n, prop.block / K + 1))
                 multicastVote(newPstate, receivers, newVote)
             } else {    
@@ -504,7 +537,7 @@ module HotShotEpochReconfig {
         // form a new proposal
         val newProp0 = formProposal(newLeader, highestQC, newLeaderState)
         // if the new proposal is an extended proposal, restart the 3 successive certs procedure
-        val newProp = if (newProp0.which == Extended) { 
+        val newProp = if (newProp0.pType == Extended) { 
             proposal(newLeader, highestQC.block, highestView + 1, Quorum, highestQC)
         } else {
             newProp0
@@ -525,38 +558,13 @@ module HotShotEpochReconfig {
         }
     }
     
-    val genesisCert = {
-        which: Quorum, 
-        signers: Set(1, 2, 4), 
-        nextEpochSigners: Set(),
-        view: 0, 
-        block: 0
-    }
+    // **Actions**
 
-    val genesisProp = {
-        sender: 1, 
-        which: Quorum, 
-        view: 1, 
-        block: 1, 
-        certificate: genesisCert
-    }
 
+    /// Initialize the state of the system
     action init = all {
-      protocolState' = 1.to(MAX_NODES).mapBy(node => {
-        view: 0,
-        highQC: None,
-        highQCArchive: Map(),
-        lockedQC: None,
-        decidedQC: None,
-        chain2: Map(),
-        decidedQCArchive: List(),
-        proposalArchive: Set(),
-        voteArchive: Set(),
-        votesMap: Map(),
-        votesBuffer: Set(),
-        propsBuffer: Set(genesisProp),
-      }),
-       allProposals' = Set(genesisProp)
+        protocolState' = initState._1,
+        allProposals' = initState._2,
     }
 
 
@@ -606,7 +614,7 @@ module HotShotEpochReconfig {
     
     val deadlock = not (protocolState.values().forall(s => size(s.votesBuffer) == 0 and size(s.propsBuffer) == 0))
     /*
-    After checking this invariant, we discovered that highQC which is used to check the validity of extended certificates 
+    After checking this invariant, we discovered an issue with highQC field that is used to check the validity of extended certificates 
     (a check on 3 consecutive views with proposal.view - 1 = proposal.cert.view and proposal.cert.view - 1 = state.highQC). 
     The problem here is that upon reaching the threshold for votes for the quorum proposal that precedes the extended proposal, 
     the leader will form a quorum certificate and store it as highQC (function updateCerts is called in the main loop). 
@@ -623,7 +631,7 @@ module HotShotEpochReconfig {
     /// Apply this only on nodes that are part of e / e+1
     val transition = not (
         // some nodes are already in the next epoch
-        protocolState.values().exists(s => s.highQC != None and s.highQC.unwrap().block == K and s.highQC.unwrap().which == Extended)
+        protocolState.values().exists(s => s.highQC != None and s.highQC.unwrap().block == K and s.highQC.unwrap().cType == Extended)
         and
         // the nodes in the current epoch have not received the votes for extended QC
         {
@@ -631,10 +639,10 @@ module HotShotEpochReconfig {
         val states2 = nodes2.map(n => protocolState.get(n))
         states2.exists(s => s.highQC != None and  
                                     s.highQC.unwrap().block == K 
-                                    and s.highQC.unwrap().which == Quorum 
-                                    and s.votesBuffer.filter(v => v.block == K and v.which == Extended).size()==0  
+                                    and s.highQC.unwrap().cType == Quorum 
+                                    and s.votesBuffer.filter(v => v.block == K and v.vType == Extended).size()==0  
                                     //some nodes might receive the proposal with the QC from the leader before receiving the votes
-                                    and s.propsBuffer.filter(p => p.certificate.block == K and p.certificate.which == Extended).size()==0) 
+                                    and s.propsBuffer.filter(p => p.certificate.block == K and p.certificate.cType == Extended).size()==0) 
         }
     )
     /*
@@ -678,6 +686,15 @@ module HotShotEpochReconfig {
 }
 
 module hotshotTimeout {
-  // Some arbitrary numbers, just to enable simulation
-  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, MAX_NODES = 8, FAULTY = Set()).*
+  // V is a list of lists, where each inner list represents the validators for a specific epoch
+  // The first 2 views should be led by the node 1 to be compatible with our current initialization.
+  // Look at the VALIDATOR CONSTANTS in the HotShotEpochReconfig module for more details.
+  val V = List(
+            List(1, 1, 2, 3, 4, 1, 2, 3, 4),
+            List(2, 6, 7, 1),
+            List(1, 2, 4, 5),
+            List(1, 5, 6, 8),
+            List(2, 3, 4, 5)
+        )
+  import HotShotEpochReconfig(N = 4, F = 1, Q = 3, K = 5, MAX_NODES = 8, FAULTY = Set(), VALIDATORS = V).*
 }
