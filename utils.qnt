@@ -8,9 +8,9 @@ module utils {
 
 
     pure def certOrNeg(cert: Option[Certificate]): Certificate = {
-        match(cert){
-            |None => {cType: Quorum, signers: Set(), nextEpochSigners: Set(),view: -1, block: -1}
-            |Some(c) => c
+        match(cert) {
+           | None => { cType: Quorum, signers: Set(), nextEpochSigners: Set(), view: -1, block: -1 }
+           | Some(c) => c
         }
     }
 
