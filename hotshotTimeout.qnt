@@ -246,23 +246,36 @@ module HotShotEpochReconfig {
         val isFirstBlock = (block % K == 1)
         
         if (isLastBlockofEpoch(block)){   // Last block of the epoch
-            if (cert.cType == Extended) false
-            // Check if the proposal with the repeated block (ie part of epoch change) has enough signatures for the current and next epoch
-            else if (block == cert.block) and{ size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q , size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch+1))) >= Q} 
-            else and {isProposalSafe(proposal,state) , size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q}
+            and {
+                cert.cType != Extended,
+
+                // Check if the proposal with the repeated block (ie part of epoch change) has enough signatures for the current and next epoch
+                (block == cert.block) implies and{ 
+                    size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q , 
+                    size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch+1))) >= Q},
+
+                // Proposal uses cerificate with block K-1, need to be signed only by nodes in epoch e.
+                (block != cert.block) implies and {
+                    isProposalSafe(proposal,state),
+                    size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q}    
+            }
         }
 
         else if (isFirstBlock and block !=1 ){ // First block of the epoch and not the genesis block, special treatment for the first block to ensure the system starts progressing
-            if (cert.cType != Extended) false
-            else if (not(isProposalSafe(proposal, state))) false
-            else and {size(cert.signers) >= Q , (size(cert.nextEpochSigners) >= Q)}
+            and {
+                cert.cType == Extended,
+                isProposalSafe(proposal, state),
+                size(cert.signers) >= Q,
+                size(cert.nextEpochSigners) >= Q
+            }
         }
 
         else { // Not first or last block of the epoch
-            if (cert.cType == Extended) false
-            else if (not(isProposalSafe(proposal, state))) false
-            else if (not(size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) false
-            else true
+            and {
+                cert.cType != Extended,
+                isProposalSafe(proposal, state), 
+                size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q 
+            }
         }
     }
 
@@ -597,10 +610,10 @@ module HotShotEpochReconfig {
             val state = protocolState.get(n)
 
             val votes = state.votesBuffer.union(allFaultyVotes)
-            nondet votesToReceive = votes.powerset().exclude(Set(Set())).oneOf()
+            nondet votesToReceive = votes.powerset().oneOf()
 
             val props = state.propsBuffer.union(allFaultyProposals)
-            nondet propsToReceive = props.powerset().exclude(Set(Set())).oneOf()
+            nondet propsToReceive = props.powerset().oneOf()
 
             deliverMessages(n, votesToReceive, propsToReceive)     
     } 
