@@ -137,17 +137,19 @@ module HotShotEpochReconfig {
         val epoch = blockEpoch(vote.block)
         val validSignature = isSignatureValid
 
-        if (vote.view < state.view) false //Old vote
-        else if (isLastBlockofEpoch(vote.block)){ //Last block of the epoch
-            if (vote.vType != Extended and not(isLeader(node, vote.view+1, vote.block))) false // Quorum votes are sent only to leaders(Only extended are broadcasted)
-            else if ((not (isInEpoch(node, epoch))) and (not (isInEpoch(node, epoch+1)))) false // If the not is not part of the epoch reconfig the vote is invalid
-            else validSignature
+        and {
+            vote.view >= state.view,
+            validSignature,
+            if (isLastBlockofEpoch(vote.block)) and {
+                vote.vType != Extended implies (isLeader(node, vote.view+1, vote.block)),
+                isInEpoch(node, epoch) or isInEpoch(node, epoch+1),
+            }
+            else and {
+                isLeader(node, vote.view+1, vote.block),
+                isInEpoch(node, epoch),
+            }
         }
-        else {
-            if (not(isLeader(node, vote.view+1, vote.block))) false  
-            else if (not (isInEpoch(node, epoch))) false
-            else validSignature
-        }
+
     }
 
 
@@ -237,7 +239,7 @@ module HotShotEpochReconfig {
     }
 
     /// Check if the certificate included in the proposal is valid
-    pure def isCertValid(proposal: Proposal, state: LocalState): bool =
+    pure def isCertValid(proposal: Proposal, state: LocalState): bool = {
         val cert = proposal.certificate
         val block = proposal.block
         val epoch = blockEpoch(block)
@@ -261,7 +263,8 @@ module HotShotEpochReconfig {
             else if (not(isProposalSafe(proposal, state))) false
             else if (not(size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q)) false
             else true
-        } 
+        }
+    }
 
     // Check if the extended proposal is valid
     pure def isExtendedProposalValid(proposal: Proposal, state: LocalState, node: Node): bool = and {
@@ -285,14 +288,14 @@ module HotShotEpochReconfig {
         }
     }
 
-    /// Check if the proposal is valid
-    pure def isProposalValid(state: LocalState, proposal: Proposal, node: Node): bool = {
-        if (proposal.view < state.view) false
-        else if (not(isSignatureValid)) false //Dummy signature check
-        else if (not(isLeader(proposal.sender, proposal.view, proposal.block))) false
-        else if (((proposal.pType == Extended)) and (not(isExtendedProposalValid(proposal, state, node)))) false
-        else if (not (isCertValid(proposal, state))) false
-        else true
+    pure def isProposalValid(state: LocalState, proposal: Proposal, node: Node): bool = { 
+        and {
+            proposal.view >= state.view,
+            isSignatureValid,
+            isLeader(proposal.sender, proposal.view, proposal.block),
+            proposal.pType == Extended implies isExtendedProposalValid(proposal, state, node),
+            isCertValid(proposal, state),
+        }
     }
 
     
