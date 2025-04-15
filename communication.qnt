@@ -1,65 +1,37 @@
 // -*- mode: Bluespec; -*-
 module communication{
-    import basicSpells.* from "spells/basicSpells"
-    import types.* from "./types"
+  import basicSpells.* from "spells/basicSpells"
+  import types.* from "./types"
 
-    //// ** MESSAGE PASSING FUNCTIONS **
-    pure def broadcastProposal(state : ProtocolState, proposal: Proposal):ProtocolState = { //THIS PROBABLY WON'T BE USED
-        state.keys().mapBy(p => {
-            val nodeState = state.get(p)
-            val newpropsBuffer = nodeState.propsBuffer.union(Set(proposal))
-            { ...nodeState, propsBuffer: newpropsBuffer }
-        })
-    }
+  /* MESSAGE PASSING FUNCTIONS */
 
-    pure def multicastProposal(state : ProtocolState, receivers: Set[Node], proposal: Proposal):ProtocolState = {
-        state.keys().mapBy(p => {
-            if (receivers.contains(p)) {
-                val nodeState = state.get(p)
-                val newpropsBuffer = nodeState.propsBuffer.union(Set(proposal))
-                { ...nodeState, propsBuffer: newpropsBuffer }
-            } else {
-                state.get(p)
-            }
-        })
-    }
+  pure def multicastProposal(receivers: Set[Node], proposal: Proposal): Set[Message] = {
+    receivers.map(n => { destinatary: n, message: ProposalMessage(proposal) })
+  }
 
-    pure def sendProposal(state : ProtocolState, receiver: Node, proposal: Proposal):ProtocolState = {
-        val nodeState = state.get(receiver)
-        val newpropsBuffer = nodeState.propsBuffer.union(Set(proposal))
-        state.put(receiver, { ...nodeState, propsBuffer: newpropsBuffer })
-    }
+  pure def multicastVote(receivers: Set[Node], vote: Vote): Set[Message] = {
+    receivers.map(n => { destinatary: n, message: VoteMessage(vote) })
+   }
 
-    pure def broadcastVote(state : ProtocolState, vote: Vote):ProtocolState = { //THIS PROBABLY WON'T BE USED
-        state.transformValues(nodeState => {
-            val newvotesBuffer = nodeState.votesBuffer.union(Set(vote))
-            { ...nodeState, votesBuffer: newvotesBuffer }
-        })
-    }
+  pure def sendVote(receiver: Node, vote: Vote): Set[Message] = {
+    Set({ destinatary: receiver, message: VoteMessage(vote) })
+  }
 
-    pure def multicastVote(state : ProtocolState, receivers: Set[Node], vote: Vote):ProtocolState = {
-        state.keys().mapBy(p => {
-            if (receivers.contains(p)) {
-                val nodeState = state.get(p)
-                val newpropsBuffer = nodeState.votesBuffer.union(Set(vote))
-                { ...nodeState, votesBuffer: newpropsBuffer }
-            } else {
-                state.get(p)
-            }
-        })
-    }
+  pure def getProposals(s: Set[Message]): Set[Proposal] = {
+    s.fold(Set(), (acc, e) => {
+      match e.message {
+        | ProposalMessage(p) => acc.union(Set(p))
+        | _ => acc
+      }
+    })
+  }
 
-    pure def sendVote(state : ProtocolState, receiver: Node, vote: Vote):ProtocolState = {
-        val nodeState = state.get(receiver)
-        val newvotesBuffer = nodeState.votesBuffer.union(Set(vote))
-        state.put(receiver, { ...nodeState, votesBuffer: newvotesBuffer })
-    }
-
-    pure def sendByzantineVote(state : ProtocolState, receivers: Set[Node]):ProtocolState = { //TODO: IS THIS NEEDED?
-        state
-    }
-
-    pure def broadcastByzantineProposal(state : ProtocolState, receivers: Set[Node]):ProtocolState = { //TODO: IS THIS NEEDED?
-        state
-    }
+  pure def getVotes(s: Set[Message]): Set[Vote] = {
+    s.fold(Set(), (acc, e) => {
+      match e.message {
+        | VoteMessage(v) => acc.union(Set(v))
+        | _ => acc
+      }
+    })
+  }
 }

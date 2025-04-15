@@ -6,7 +6,6 @@ module utils {
     import basicSpells.* from "spells/basicSpells"
     import rareSpells.* from "spells/rareSpells"
 
-
     pure def certOrNeg(cert: Option[Certificate]): Certificate = {
         match(cert) {
            | None => { cType: Quorum, signers: Set(), nextEpochSigners: Set(), view: -1, block: -1 }

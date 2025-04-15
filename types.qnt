@@ -26,6 +26,7 @@ module types {
     
     /// State of a single Node/Validator/Replica in the System.
     type LocalState = {
+        node: Node,
         view: int,
         highQC: Option[Certificate], // highest proposal known to be valid
         lockedQC: Option[Certificate], // locked proposal
@@ -36,11 +37,12 @@ module types {
         proposalArchive: Set[Proposal], //keeping track of all the received proposal
         voteArchive: Set[Vote], //keeping track of all the received votes
         votesMap: (VoteType, Block, int, int) -> Set[Node], //(type, data, view, epoch) -> voters
-        // Message buffer
-        votesBuffer: Set[Vote],
-        propsBuffer: Set[Proposal],
     }
+
+    type MessageContent = ProposalMessage(Proposal) | VoteMessage(Vote)
+    type Message = { destinatary: Node, message: MessageContent }
+    type MessageBuffer = Set[Message]
+
     /// Protocol State is a mapping from a node ID to individual node states.
     type ProtocolState = Node -> LocalState
-
 }
