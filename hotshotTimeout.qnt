@@ -125,22 +125,22 @@ module HotShotEpochReconfig {
 
   /// Return the epochs for which a node is active (only the current epoch or the current and next epoch)
   pure def getEpochs(node: Node, block: Block): Set[int] = {
-    val epoch = blockEpoch(block)
+    val epoch = block.blockEpoch()
 
     if (block.isLastBlockOfEpoch())
-      Set(epoch, epoch + 1).filter(e => isInEpoch(node, e))
+      Set(epoch, epoch + 1).filter(e => node.isInEpoch(e))
     else
-      Set(epoch).filter(e => isInEpoch(node, e))
+      Set(epoch).filter(e => node.isInEpoch(e))
   }
 
   /// Check if a node is the leader for a given view and block
   pure def isLeader(node: Node, view: int, block: int): bool = {
-      node == leader(view, blockEpoch(block))
+    node == leader(view, block.blockEpoch())
   }
 
   /// Abstraction of signature validation
   pure def isSignatureValid: bool = {
-      true
+    true
   }
 
   /// Check if a received vote is valid for a given node
@@ -152,7 +152,7 @@ module HotShotEpochReconfig {
       vote.view >= state.view,
       validSignature,
       if (vote.block.isLastBlockOfEpoch()) and {
-        vote.vType != Extended implies (isLeader(state.node, vote.view + 1, vote.block)),
+        vote.vType != Extended implies state.node.isLeader(vote.view + 1, vote.block),
         state.node.isInEpoch(epoch) or state.node.isInEpoch(epoch + 1),
       } else and {
         state.node.isLeader(vote.view + 1, vote.block),
@@ -179,7 +179,7 @@ module HotShotEpochReconfig {
 
   /// Return a vote record
   pure def vote(node: Node, block: Block, view: int, vType: VoteType): Vote = {
-      { sender: node, vType: vType, view: view, block: block }
+    { sender: node, vType: vType, view: view, block: block }
   }
 
   /// Return a certificate record for a given block, includes optional extra
@@ -191,22 +191,20 @@ module HotShotEpochReconfig {
     block: Block,
     state: LocalState
   ): Certificate = {
-    pure val epoch = blockEpoch(block)
-
+    pure val epoch = block.blockEpoch()
     pure val signers = state.votesMap.getOrElse((cType, block, view, epoch), Set())
-    pure val basicCert = {
-      cType: cType,
-      signers: signers,
-      nextEpochSigners: Set(),
-      view: view,
-      block: block
+    pure val nextEpochSigners = if (block.isLastBlockOfEpoch()) {
+      state.votesMap.getOrElse((cType, block, view, epoch + 1), Set())
+    } else {
+      Set()
     }
 
-    if (block.isLastBlockOfEpoch()) {
-      pure val nextSigners = state.votesMap.getOrElse((cType, block, view, epoch + 1), Set())
-      { ...basicCert, nextEpochSigners: nextSigners }
-    } else {
-      basicCert
+    {
+      cType: cType,
+      signers: signers,
+      nextEpochSigners: nextEpochSigners,
+      view: view,
+      block: block
     }
   }
 
@@ -260,7 +258,7 @@ module HotShotEpochReconfig {
       | None => true // No locked QC, the proposal is safe by default (TODO: Is this correct?)
       | Some(qc) => {
         or {
-          extends(block, qc.block), // Safety
+          block.extends(qc.block), // Safety
           proposal.certificate.view > qc.view // Liveness
         }
       }
@@ -271,7 +269,7 @@ module HotShotEpochReconfig {
   pure def isCertValid(proposal: Proposal, state: LocalState): bool = {
     pure val cert = proposal.certificate
     pure val block = proposal.block
-    pure val epoch = blockEpoch(block)
+    pure val epoch = block.blockEpoch()
 
     if (block.isLastBlockOfEpoch()) {
       and {
@@ -280,14 +278,14 @@ module HotShotEpochReconfig {
         // Check if the proposal with the repeated block (ie part of epoch
         // change) has enough signatures for the current and next epoch
         (block == cert.block) implies and {
-          size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q ,
-          size(cert.nextEpochSigners.filter(s => isInEpoch(s,epoch+1))) >= Q
+          size(cert.signers.filter(s => s.isInEpoch(epoch))) >= Q ,
+          size(cert.nextEpochSigners.filter(s => s.isInEpoch(epoch + 1))) >= Q
         },
 
         // Proposal uses cerificate with block K-1, need to be signed only by nodes in epoch e.
         (block != cert.block) implies and {
-            isProposalSafe(proposal,state),
-            size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q
+          isProposalSafe(proposal, state),
+          size(cert.signers.filter(s => s.isInEpoch(epoch))) >= Q
         }
       }
     } else if (block.isFirstBlockOfEpoch() and block != 1) {
@@ -304,7 +302,7 @@ module HotShotEpochReconfig {
       and {
         cert.cType != Extended,
         isProposalSafe(proposal, state),
-        size(cert.signers.filter(s => isInEpoch(s,epoch))) >= Q
+        size(cert.signers.filter(s => s.isInEpoch(epoch))) >= Q
       }
     }
   }
@@ -348,8 +346,8 @@ module HotShotEpochReconfig {
     newBlocks: List[Certificate]
   ): int -> List[Block] = {
     pure val chainMap = newBlocks.foldl(oldChain, (cm, c) => {
-      val epoch = c.block / K + 1
-      val x = cm.has(epoch)
+      pure val epoch = c.block / K + 1
+      pure val x = cm.has(epoch)
       if (x)
         cm.setBy(epoch, chain => chain.append(c.block))
       else
@@ -498,7 +496,7 @@ module HotShotEpochReconfig {
 
         if (state.node == leader(newProp.view, newPropEpoch)) {
           // Update certificates based on the proposal's certificate
-          val receivers = if (isLastBlockOfEpoch(newProp.block)) {
+          pure val receivers = if (isLastBlockOfEpoch(newProp.block)) {
             // If the proposal is the last block of the epoch, send to all nodes in the current and next epoch
             allNodes.filter(n => n.isInEpoch(newPropEpoch) or n.isInEpoch(newPropEpoch + 1))
           } else {
@@ -574,14 +572,12 @@ module HotShotEpochReconfig {
 
     // update the state of all nodes to the highest view
     val updatedState = nodes.fold(protocolState, (pState, node) => {
-      val newLocalState = updateToNewView(pState.get(node), highestView)
-      pState.setBy(node, s => newLocalState)
+      pState.setBy(node, s => { ...s, view: max(s.view, highestView) })
     })
 
     // leader collects the highest QC from all correct nodes
     val highestQC = correct.fold(genesisCert, (maxQC, node) => {
-      val nodeState = updatedState.get(node)
-      val nodeQC = nodeState.highQC
+      val nodeQC = updatedState.get(node).highQC
       match(nodeQC) {
         | None => maxQC
         | Some(qc) => {
@@ -599,7 +595,6 @@ module HotShotEpochReconfig {
       val newLeader = leader(highestView + 1, epoch)
       // update the view of the new leader
       val newLeaderState = { ...updatedState.get(newLeader), view: highestView + 1 }
-      val updatedState2 = updatedState.setBy(newLeader, state => newLeaderState)
 
       // form a new proposal
       val newProp0 = formProposal(highestQC, newLeaderState)
@@ -611,16 +606,16 @@ module HotShotEpochReconfig {
       }
 
       val newPropEpoch = newProp.block.blockEpoch()
-      val receivers = if (isLastBlockOfEpoch(newProp.block)) {
-        nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
+      val receivers = if (newProp.block.isLastBlockOfEpoch()) {
+        nodes.filter(n => n.isInEpoch(newPropEpoch) or n.isInEpoch(newPropEpoch + 1))
       } else {
-        nodes.filter(n => isInEpoch(n, newPropEpoch))
+        nodes.filter(n => n.isInEpoch(newPropEpoch))
       }
 
       val newMessages = multicastProposal(receivers, newProp)
 
       all {
-        protocolState' = updatedState2,
+        protocolState' = updatedState.set(newLeader, newLeaderState),
         messages' = messages.union(newMessages),
       }
     }
@@ -633,9 +628,9 @@ module HotShotEpochReconfig {
   }
 
   /// Execution Loop
-  /// The execution step (step) randomly picks a validator and either:
-  /// Delivers a pending message (deliver).
-  /// Triggers a (viewSync).
+  /// The execution step (step) either:
+  /// Delivers a subset of the pending messages.
+  /// Triggers a viewSync.
   action step = {
     // Nondeterministically choose between normal message handling and view
     // synchronization with a skew towards normal steps so the system is more
