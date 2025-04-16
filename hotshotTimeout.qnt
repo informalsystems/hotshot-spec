@@ -538,9 +538,9 @@ module HotShotEpochReconfig {
       if (prop.pType == Extended) {
         // if the prop is an extended vote
         pure val receivers = allNodes.filter(n => n.isInEpoch(prop.block / K + 1))
-        (state, multicastVote(receivers, newVote))
+        (newState, multicastVote(receivers, newVote))
       } else {
-        (state, sendVoteToLeader(newState, newVote))
+        (newState, sendVoteToLeader(newState, newVote))
       }
     } else {
       (state, Set())
@@ -565,30 +565,6 @@ module HotShotEpochReconfig {
   }
 
   val activeNodes = protocolState.keys()
-
-  // pure def accumulateProposals(pState: ProtocolState, allProps: Set[Proposal]): Set[Proposal] = {
-  //   pState.values().fold(allProps, (props, state) => {
-  //     props.union(state.propsBuffer).union(state.proposalArchive)
-  //   })
-  // }
-
-  /// Non deterministic action to simulate message delivery via network under
-  /// the assumption of partial synchrony.
-  // action deliverMessages(node: Node, votes: Set[Vote], proposals: Set[Proposal]): bool = {
-  //   val allProps = accumulateProposals(protocolState, proposals)
-
-  //   val pState = votes.fold(protocolState, (updatedState, vote) => {
-  //     handleVote(vote, updatedState, node, allProps)
-  //   })
-
-  //   val pState1 = proposals.fold(pState, (updatedState, prop) => {
-  //     handleProposal(prop, updatedState, node, allProps)
-  //   })
-
-  //   all {
-  //     protocolState' = pState1,
-  //   }
-  // }
 
   /// This action abstracts away viewSync and brings all correct nodes to the highest view
   action viewSync: bool = {
@@ -643,14 +619,14 @@ module HotShotEpochReconfig {
 
     all {
       protocolState' = updatedState2,
-      messages' = messages.union(newMessages)
+      messages' = messages.union(newMessages),
     }
   }
 
   /// Initialize the state of the system
   action init = all {
     protocolState' = initState,
-    messages' = correct.map(n => { destinatary: n, message: ProposalMessage(genesisProp) })
+    messages' = correct.map(n => { destinatary: n, message: ProposalMessage(genesisProp) }),
   }
 
   /// Execution Loop
@@ -677,10 +653,7 @@ module HotShotEpochReconfig {
     nondet n = oneOf(correct)
     val state = protocolState.get(n)
 
-    val fetchProposalMessages = tuples(activeNodes, allProposals).map(((node, prop)) => {
-      { destinatary: node, message: ProposalMessage(prop) }
-    })
-    val messagesToActive = messages.union(allFaultyMessages).union(fetchProposalMessages)
+    val messagesToActive = messages.union(allFaultyMessages)
       .filter(m => m.destinatary.in(activeNodes))
 
     nondet messagesToReceive = oneOf(messagesToActive.powerset())
