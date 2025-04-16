@@ -592,34 +592,37 @@ module HotShotEpochReconfig {
 
     val lastCertifiedBlock = highestQC.block
     val epoch = lastCertifiedBlock.blockEpoch()
-
-    // leader of the next view proceeds to propose a new block
-    val newLeader = leader(highestView + 1, epoch)
-    // update the view of the new leader
-    val newLeaderState = { ...updatedState.get(newLeader), view: highestView + 1 }
-    val updatedState2 = updatedState.setBy(newLeader, state => newLeaderState)
-
-    // form a new proposal
-    val newProp0 = formProposal(highestQC, newLeaderState)
-    // if the new proposal is an extended proposal, restart the 3 successive certs procedure
-    val newProp = if (newProp0.pType == Extended) {
-      proposal(newLeader, highestQC.block, highestView + 1, Quorum, highestQC)
-    } else {
-      newProp0
-    }
-
-    val newPropEpoch = newProp.block.blockEpoch()
-    val receivers = if (isLastBlockOfEpoch(newProp.block)) {
-      nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
-    } else {
-      nodes.filter(n => isInEpoch(n, newPropEpoch))
-    }
-
-    val newMessages = multicastProposal(receivers, newProp)
-
     all {
-      protocolState' = updatedState2,
-      messages' = messages.union(newMessages),
+      epoch > 0,
+
+      // leader of the next view proceeds to propose a new block
+      val newLeader = leader(highestView + 1, epoch)
+      // update the view of the new leader
+      val newLeaderState = { ...updatedState.get(newLeader), view: highestView + 1 }
+      val updatedState2 = updatedState.setBy(newLeader, state => newLeaderState)
+
+      // form a new proposal
+      val newProp0 = formProposal(highestQC, newLeaderState)
+      // if the new proposal is an extended proposal, restart the 3 successive certs procedure
+      val newProp = if (newProp0.pType == Extended) {
+        proposal(newLeader, highestQC.block, highestView + 1, Quorum, highestQC)
+      } else {
+        newProp0
+      }
+
+      val newPropEpoch = newProp.block.blockEpoch()
+      val receivers = if (isLastBlockOfEpoch(newProp.block)) {
+        nodes.filter(n => isInEpoch(n, newPropEpoch) or isInEpoch(n, newPropEpoch + 1))
+      } else {
+        nodes.filter(n => isInEpoch(n, newPropEpoch))
+      }
+
+      val newMessages = multicastProposal(receivers, newProp)
+
+      all {
+        protocolState' = updatedState2,
+        messages' = messages.union(newMessages),
+      }
     }
   }
 
