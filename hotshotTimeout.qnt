@@ -11,15 +11,15 @@ module HotShotEpochReconfig {
 
   /* Constants (system parameters) */
 
-  /// Total number of nodes (participants in consensus)
+  /// Number of participants in every consensus epoch, we assume that the number of particpants per epoch is constant.
   const N: int
-  /// Fault tolerance threshold
+  /// Fault tolerance threshold per epoch.
   const F: int
   /// Quorum size (2F+1 signatures needed for decisions)
   const Q: int
   /// Epoch duration
   const K: int
-  /// Size of the universe of node IDs (>= N, to allow new nodes joining)
+  /// Size of the universe of node IDs (>= N, to allow new nodes joining/leaving)
   const MAX_NODES: int
   /// Set of faulty nodes (size <= F)
   const FAULTY: Set[Node]
@@ -52,7 +52,7 @@ module HotShotEpochReconfig {
 
   pure val genesisCert = {
     cType: Quorum,
-    signers: Set(1, 2, 4),
+    signers: stakingTables[0], // Genesis block is signed by all nodes in the first epoch
     nextEpochSigners: Set(),
     view: 0,
     block: 0
@@ -762,6 +762,7 @@ module hotshotTimeout {
   // V is a list of lists, where each inner list represents the validators for a specific epoch.
   // The first 2 views should be led by the node 1 to be compatible with our current initialization.
   // Look at the VALIDATOR CONSTANTS in the HotShotEpochReconfig module for more details.
+  // NB: Every set has exactly N validators at most F of these N are faulty.
   pure val V = List(
     List(1, 1, 2, 3, 4, 1, 2, 3, 4),
     List(2, 6, 7, 1),
