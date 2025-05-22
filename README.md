@@ -1,8 +1,10 @@
+<p align="center">
+<img src="artwork.png" width=50% height=50% alt="Quint Espresso Artwork">
+</p>
+
 # HotShot Consensus Epoch Changes - Quint Specification
 
 A Quint specification of Epoch changes in the Hotshot consensus.
-
-<img src="artwork.png" width=50% height=50% alt="Quint Espresso Artwork">
 
 Check out the blog post about this work: [Espresso HotShot Epoch Changes in Quint](https://informal.systems/blog/espresso-hotshot-epoch-changes-in-quint-2025)
 
